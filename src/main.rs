@@ -327,14 +327,14 @@ impl<'brand, 'arena, V: Default> Dcel<'brand, 'arena, V> {
         //let fb = b1.borrow(&self.token).face?;
 
         let mut a3 = a1.borrow(&self.token).next?;
-        /*if a3.borrow(&self.token) == b1.borrow(&self.token) {
-            a3 = b2;
-        }*/
+        if a3.borrow(&self.token) == b1.borrow(&self.token) {
+            a3 = a1; // b3
+        }
 
         let mut b3 = b1.borrow(&self.token).prev?;
-        /*if b3.borrow(&self.token) == a1.borrow(&self.token) {
-            b3 = a2;
-        }*/
+        if b3.borrow(&self.token) == a1.borrow(&self.token) {
+            b3 = b1; // a2
+        }
 
         self.twin(a2, b2);
 
