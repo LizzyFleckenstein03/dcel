@@ -246,13 +246,6 @@ impl<'brand, 'arena, V: Default> Dcel<'brand, 'arena, V> {
         }
     }
 
-    pub fn mvsf(&mut self, data: V) -> (cell!(Vertex), cell!(Face)) {
-        let f = self.faces.alloc(&mut self.token, ());
-        let v = self.vertices.alloc(&mut self.token, data);
-
-        (v, f)
-    }
-
     pub fn mevvls(&mut self, data: [V; 2]) -> (cell!(HalfEdge), [cell!(Vertex); 2], cell!(Face)) {
         let [d1, d2] = data;
 
@@ -296,23 +289,23 @@ impl<'brand, 'arena, V: Default> Dcel<'brand, 'arena, V> {
     ) -> Option<(cell!(HalfEdge), cell!(Vertex))> {
         // before:
         //
-        //            fa
+        //                        >
         //                       / a3
         //          a1 ->
         // v1         v         v2
         //          <- b1
         //                       \ b3
-        //            fb
+        //                        <
         //
         // after:
         //
-        //            fa
+        //                        >
         //                       / a3
         //     a1 ->     a2 ->
         // v1         v         v2
         //     <- b1     <- b2
         //                       \ b3
-        //            fb
+        //                        <
 
         let v = self.vertices.alloc(&mut self.token, data);
         let a2 = self.half_edges.alloc(&mut self.token, ());
@@ -328,12 +321,12 @@ impl<'brand, 'arena, V: Default> Dcel<'brand, 'arena, V> {
 
         let mut a3 = a1.borrow(&self.token).next?;
         if a3.borrow(&self.token) == b1.borrow(&self.token) {
-            a3 = a1; // b3
+            a3 = b1; // a1
         }
 
         let mut b3 = b1.borrow(&self.token).prev?;
         if b3.borrow(&self.token) == a1.borrow(&self.token) {
-            b3 = b1; // a2
+            b3 = a2; // b1
         }
 
         self.twin(a2, b2);
@@ -348,16 +341,48 @@ impl<'brand, 'arena, V: Default> Dcel<'brand, 'arena, V> {
         self.follow(b3, b2);
         self.follow(b2, b1);
 
-        Some((a1, v))
+        Some((a2, v))
     }
 
+    // pub fn mel(&mut self, b0: cell!(HalfEdge), a2: cell!(HalfEdge)) -> Option<()> {
     pub fn mel(&mut self, v1: cell!(Vertex), v2: cell!(Vertex)) -> Option<()> {
-        let a = self.half_edges.alloc(&mut self.token, ());
-        let b = self.half_edges.alloc(&mut self.token, ());
+        // before:
+        //     >               >
+        //   a0 \             / a2
+        //       v1         v2
+        //   b0 /             \ b2
+        //     <               <
+        //
+        // after:
+        //     >               >
+        //   a0 \    a1 ->    / a2
+        //       v1         v2
+        //   b0 /    <- b1    \ b2
+        //     <               <
+        //
 
-        self.twin(a, b);
+        let a1 = self.half_edges.alloc(&mut self.token, ());
+        let b1 = self.half_edges.alloc(&mut self.token, ());
 
-        //self.origin();
+        let b0 = v1.borrow(&self.token).outgoing?;
+        let a2 = v2.borrow(&self.token).outgoing?;
+
+        //let v1 = b0.borrow(&self.token).origin?;
+        //let v2 = a2.borrow(&self.token).origin?;
+
+        let a0 = b0.borrow(&self.token).twin?;
+        let b2 = a2.borrow(&self.token).twin?;
+
+        self.twin(a1, b1);
+
+        self.origin(v1, a1);
+        self.origin(v2, b1);
+
+        self.follow(a0, a1);
+        self.follow(a1, a2);
+
+        self.follow(b2, b1);
+        self.follow(b1, b0);
 
         Some(())
     }
@@ -381,6 +406,8 @@ impl<'brand, 'arena, V: Default> Dcel<'brand, 'arena, V> {
 
         (v, a, b)
     }
+
+    //fn mekh(&mut self, )
 }
 
 struct DcelDotOptions {
@@ -424,22 +451,14 @@ fn dcel_write_dot(
     for v in dcel.vertices.elements.iter() {
         let v = v.borrow(&dcel.token);
         if let Some(id) = v.id {
-            // writeln!(f, "\t{id} [pos=\"{},{}!\"]", v.data.0, v.data.1)?;
             writeln!(
                 f,
-                "{id} [label=\"{}\", pos=\"{},{}!\"]",
+                "vertex_{id} [label=\"{}\", pos=\"{},{}!\"]",
                 v.data.0, v.data.1[0], v.data.1[1]
             );
             rank.push(id);
         }
     }
-
-    /*
-    write!(f, "{{ rank=same; ")?;
-    for r in rank {
-        write!(f, "{r}; ")?;
-    }
-    writeln!(f, "}}");*/
 
     for h in dcel.half_edges.elements.iter() {
         let h = h.borrow(&dcel.token);
@@ -447,42 +466,62 @@ fn dcel_write_dot(
             let twin = h.twin.unwrap().borrow(&dcel.token);
             let twin_id = twin.id.unwrap();
 
-            let a_v = h.origin.unwrap().borrow(&dcel.token);
-            let b_v = twin.origin.unwrap().borrow(&dcel.token);
+            let connect = |f: &mut fmt::Formatter<'_>,
+                           id: &str,
+                           label: &str,
+                           attr: &str,
+                           pts: [(&str, [f64; 2]); 2]|
+             -> Result<(), fmt::Error> {
+                let mut vec = [pts[1].1[1] - pts[0].1[1], pts[1].1[0] - pts[0].1[0]];
 
-            let mut vec = [
-                -(b_v.data.1[1] - a_v.data.1[1]) as f64,
-                (b_v.data.1[0] - a_v.data.1[0]) as f64,
-            ];
+                let len = (vec[0] * vec[0] + vec[1] * vec[1]).sqrt();
+                vec[0] *= -0.075;
+                vec[1] *= 0.075;
 
-            let len = (vec[0] * vec[0] + vec[1] * vec[1]).sqrt();
-            vec[0] *= 0.2 / len;
-            vec[1] *= 0.2 / len;
+                let mid = [
+                    (pts[1].1[0] + pts[0].1[0]) / 2.0 + vec[0],
+                    (pts[1].1[1] + pts[0].1[1]) / 2.0 + vec[1],
+                ];
 
-            let mid = [
-                (a_v.data.1[0] + b_v.data.1[0]) as f64 / 2.0 + vec[0],
-                (a_v.data.1[1] + b_v.data.1[1]) as f64 / 2.0 + vec[1],
-            ];
+                writeln!(
+                    f,
+                    "{id} [pos=\"{},{}!\", shape=point, width=0.01, height=0.01]",
+                    mid[0], mid[1]
+                )?;
+                writeln!(f, "{} -> {id} [{attr}arrowhead=none]", pts[0].0)?;
+                writeln!(f, "{id} -> {} [{attr}label=\"{label}\"]", pts[1].0)?;
 
-            let a = a_v.id.unwrap();
-            let b = b_v.id.unwrap();
+                Ok(())
+            };
 
-            writeln!(
+            let a = h.origin.unwrap().borrow(&dcel.token);
+            let b = twin.origin.unwrap().borrow(&dcel.token);
+
+            connect(
                 f,
-                "edge_{id} [pos=\"{},{}!\", shape=point, width=0.01, height=0.01]",
-                mid[0], mid[1]
+                &format!("half_edge_{id}"),
+                &format!("{id}"),
+                "",
+                [
+                    (
+                        &format!("vertex_{}", a.id.unwrap()),
+                        [a.data.1[0] as _, a.data.1[1] as _],
+                    ),
+                    (
+                        &format!("vertex_{}", b.id.unwrap()),
+                        [b.data.1[0] as _, b.data.1[1] as _],
+                    ),
+                ],
             )?;
-            writeln!(f, "{a} -> edge_{id} [arrowhead=none]")?;
-            writeln!(f, "edge_{id} -> {b} [label=\"{id}\"]")?;
 
             if opt.twin {
-                writeln!(f, "edge_{id} -> edge_{twin_id} [color=\"red\"]")?;
+                writeln!(f, "half_edge_{id} -> half_edge_{twin_id} [color=\"red\"]")?;
             }
 
             if opt.next {
                 writeln!(
                     f,
-                    "edge_{id} -> edge_{} [color=\"green\"]",
+                    "half_edge_{id} -> half_edge_{} [color=\"green\"]",
                     h.next.unwrap().borrow(&dcel.token).id.unwrap()
                 )?;
             }
@@ -490,7 +529,7 @@ fn dcel_write_dot(
             if opt.prev {
                 writeln!(
                     f,
-                    "edge_{id} -> edge_{} [color=\"blue\"]",
+                    "half_edge_{id} -> half_edge_{} [color=\"blue\"]",
                     h.prev.unwrap().borrow(&dcel.token).id.unwrap()
                 )?;
             }
@@ -509,28 +548,46 @@ impl<T: Fn(&mut fmt::Formatter<'_>) -> fmt::Result> fmt::Display for DisplayFn<T
     }
 }
 
+use std::io::Write;
+
 fn main() {
     GhostToken::new(|token| {
         let alloc = DcelAllocator::default();
         let mut dcel = Dcel::new(token, &alloc);
 
-        let h0 = dcel.mevvls([("S", [0, 0]), ("E", [9, 0])]).0;
-        let h2 = dcel.mve(h0, ("P1", [6, 0])).unwrap().0;
-        dcel.mve(h2, ("P2", [3, 0])).unwrap();
+        let show = |name, dcel: &Dcel<(&'static str, [i64; 2])>| {
+            write!(
+                &mut std::fs::File::create(name).unwrap(),
+                "{}",
+                DisplayFn(|f: &mut fmt::Formatter<'_>| dcel_write_dot(
+                    dcel,
+                    f,
+                    DcelDotOptions {
+                        prev: false,
+                        next: true,
+                        twin: false,
+                    }
+                ))
+            )
+            .unwrap();
+        };
 
-        dcel.mev(h0.borrow(&dcel.token).origin.unwrap(), ("B", [0, 3]));
+        let (a, [w, n], _) = dcel.mevvls([("W", [-4, 0]), ("N", [0, 4])]);
+        show("1.dot", &dcel);
 
-        print!(
-            "{}",
-            DisplayFn(|f: &mut fmt::Formatter<'_>| dcel_write_dot(
-                &dcel,
-                f,
-                DcelDotOptions {
-                    prev: false,
-                    next: true,
-                    twin: false,
-                }
-            ))
+        let b = dcel.mve(a, ("E", [4, 0])).unwrap().0;
+        show("2.dot", &dcel);
+
+        dcel.mve(a, ("S", [0, -4])).unwrap();
+        show("3.dot", &dcel);
+
+        dcel.mel(/*a, b.borrow(&dcel.token).twin.unwrap()*/ w, n);
+        show("4.dot", &dcel);
+
+        eprintln!(
+            "{} {}",
+            a.borrow(&dcel.token).id.unwrap(),
+            b.borrow(&dcel.token).id.unwrap()
         );
 
         /*

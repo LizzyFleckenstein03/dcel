@@ -6,6 +6,7 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+anyhow = "1.0.79"
 either = "1.9.0"
 ghost-cell = "0.2.3"
 rand = "0.8.5"
