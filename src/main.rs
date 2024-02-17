@@ -10,9 +10,7 @@ use std::fmt;
 pub use typed_arena::Arena;
 
 pub mod ext {
-    pub use super::{
-        BodyExt, EdgeExt, FaceExt, HalfEdgeExt, HasLens, LoopExt, ShellExt, VertexExt,
-    };
+    pub use super::{BodyExt, EdgeExt, FaceExt, HalfEdgeExt, LoopExt, ShellExt, VertexExt};
 }
 
 pub trait ReflAsRef<T> {
@@ -139,10 +137,10 @@ trait Entity<'brand, 'arena>: Eq {
     }
 }
 
-pub trait HasLens<'tok, 'brand> {
-    type Lens;
-
-    fn lens(self, token: &'tok GhostToken<'brand>) -> Self::Lens;
+macro_rules! lens {
+	($token: expr, $($name:ident),*) => {
+		$( let $name = $name.lens($token); )*
+	};
 }
 
 macro_rules! entity {
@@ -288,11 +286,6 @@ macro_rules! entity {
 					$func $field(self, token: &impl ReflAsRef<GhostToken<'brand>>) -> ptr!($field_ty) {
 						self.as_self().borrow(token.as_ref()).$field.unwrap()
 					}
-
-					/*
-					$func [<maybe_ $field>](self, token: &impl ReflAsRef<GhostToken<'brand>>) -> Option<ptr!($field_ty)> {
-						self.as_self().borrow(token.as_ref()).$field
-					}*/
 				)?)*)?
 
 
@@ -329,38 +322,6 @@ macro_rules! entity {
 				fn as_self(self) -> ptr!($T) {
 					self
 				}
-
-				/*
-				$($($(
-					$func $field(self, token: &impl ReflAsRef<GhostToken<'brand>>) -> ptr!($field_ty) {
-						self.borrow(token.as_ref()).$field.unwrap()
-					}
-
-				)?)*)?
-
-				$($($(
-					$init_func $init_field<'tok, 'out>(
-						self,
-						token: &'tok impl ReflAsRef<GhostToken<'brand>>
-					) -> &'out $init_ty
-					where
-						'arena: 'out,
-						'tok: 'out
-					{
-						&self.borrow(token.as_ref()).$init_field
-					}
-
-					$init_func [<mut_ $init_field>]<'tok, 'out>(
-						self,
-						token: &'tok mut impl ReflAsMut<GhostToken<'brand>>
-					) -> &'out mut $init_ty
-					where
-						'arena: 'out,
-						'tok: 'out
-					{
-						&mut self.borrow_mut(token.as_mut()).$init_field
-					}
-				)?)*)?*/
 			}
 
 			pub struct [<$T Lens>]<'tok, 'brand, 'arena, V> {
@@ -385,6 +346,13 @@ macro_rules! entity {
 			impl<'tok, 'brand, 'arena, V> ReflAsRef<GhostToken<'brand>> for [<$T Lens>]<'tok, 'brand, 'arena, V> {
 				fn as_ref(&self) -> &GhostToken<'brand> {
 					&self.token
+				}
+			}
+
+			impl<'tok, 'brand, 'arena, V> std::fmt::Debug for [<$T Lens>]<'tok, 'brand, 'arena, V> {
+				fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+					// TODO: add more fields
+					write!(f, "{}({})", stringify!($T), self.id())
 				}
 			}
 
@@ -425,14 +393,6 @@ macro_rules! entity {
 					}
 				)*)?
 			}
-
-			/*impl<'tok, 'brand, 'arena, V> HasLens<'tok, 'brand> for ptr!($T) {
-				type Lens = [<$T Lens>]<'tok, 'brand, 'arena, V>;
-
-				fn lens(self, token: &'tok GhostToken<'brand>) -> Self::Lens {
-					Self::Lens(self, token)
-				}
-			}*/
 		}
 
 		impl<'brand, 'arena, V> Own<'brand, 'arena, $T<'brand, 'arena, V>> {
@@ -752,12 +712,21 @@ impl<'brand, 'arena, V> Dcel<'brand, 'arena, V> {
 
         let [a, b] = edge.borrow_mut(&mut self.token).half_edges.take().unwrap();
 
-        assert!(a.lens(self)._next().eq(*b));
-        assert!(b.lens(self)._next().eq(*a));
-        assert!(loop_.lens(self)._next().eq(*loop_));
-        assert!(face.lens(self)._next().eq(*face));
-        assert!(face.lens(self)._outer_loops().eq(*loop_));
-        assert!(face.maybe_inner_loops(self).is_none());
+        {
+            lens!(self, a, b, loop_, face, shell, v1, v2);
+
+            assert!([a.origin(), b.origin()] == [v1, v2] || [a.origin(), b.origin()] == [v2, v1]);
+
+            assert_eq!(a._next(), b);
+            assert_eq!(b._next(), a);
+            assert_eq!(a.loop_(), loop_);
+
+            assert_eq!(face._outer_loops(), loop_);
+            assert!(face.maybe_inner_loops().is_none());
+
+            assert_eq!(face._next(), face);
+            assert_eq!(shell._faces(), face);
+        }
 
         let shells = Entity::list_remove(*shell, self);
         shell._body(self).set_opt_shells(self, shells);
@@ -1141,6 +1110,7 @@ fn main() {
         let op = dcel.mevvlfs(*body, [("W", [-4, 0]), ("N", [0, 4])]);
         println!("{}", dcel.equals(*op.vertices[0], *op.vertices[1]));
         println!("{}", dcel.equals(*op.vertices[0], *op.vertices[0]));
+        println!("{:?}", op.loop_.lens(&dcel));
         dcel.undo(op.into());
 
         /*
