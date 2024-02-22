@@ -47,14 +47,46 @@ fn short_debug(ty: &'static str, id: usize) -> impl Debug {
 
 macro_rules! ptr_t {
 	($T:ty) => {
-		&'arena GhostCell<'brand, $T>
+		Ptr<'brand, 'arena, $T>
 	}
 }
 
 macro_rules! ptr {
 	($T:ident) => {
-		&'arena GhostCell<'brand, $T<'brand, 'arena, V>>
+		Ptr<'brand, 'arena, $T<'brand, 'arena, V>>
 	};
+}
+
+pub struct Ptr<'brand, 'arena, T: ?Sized>(pub &'arena GhostCell<'brand, T>);
+
+impl<'brand, 'arena, T: ?Sized> Clone for ptr_t!(T) {
+    fn clone(&self) -> Self {
+        Self(self.0)
+    }
+}
+impl<'brand, 'arena, T: ?Sized> Copy for ptr_t!(T) {}
+
+impl<'brand, 'arena, T: ?Sized> ptr_t!(T) {
+    pub fn borrow<'tok, 'out>(&self, token: &'tok impl ReflAsRef<GhostToken<'brand>>) -> &'out T
+    where
+        'brand: 'out,
+        'arena: 'out,
+        'tok: 'out,
+    {
+        self.0.borrow(token.as_ref())
+    }
+
+    pub fn borrow_mut<'tok, 'out>(
+        &self,
+        token: &'tok mut impl ReflAsMut<GhostToken<'brand>>,
+    ) -> &'out mut T
+    where
+        'brand: 'out,
+        'arena: 'out,
+        'tok: 'out,
+    {
+        self.0.borrow_mut(token.as_mut())
+    }
 }
 
 macro_rules! own_t {
@@ -69,6 +101,25 @@ macro_rules! own {
 	};
 }
 
+pub struct Own<'brand, 'arena, T>(ptr_t!(T));
+
+impl<'brand, 'arena, T> Own<'brand, 'arena, T> {
+    // avoid this
+    pub fn unsafe_make_owned(this: ptr_t!(T)) -> Self {
+        Self(this)
+    }
+}
+
+impl<'brand, 'arena, T> Deref for own_t!(T) {
+    type Target = ptr_t!(T);
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+pub type Id = Option<usize>;
+
 macro_rules! lens_t {
 	($T:ty) => {
 		Lens<'tok, 'brand, 'arena, $T>
@@ -80,36 +131,6 @@ macro_rules! lens {
 		Lens<'tok, 'brand, 'arena, $T<'brand, 'arena, V>>
 	};
 }
-
-pub struct Own<'brand, 'arena, T>(ptr_t!(T));
-
-impl<'brand, 'arena, T> Own<'brand, 'arena, T> {
-    // avoid this
-    pub fn unsafe_make_owned(this: ptr_t!(T)) -> Self {
-        Self(this)
-    }
-}
-
-impl<'brand, 'arena, T> Deref for Own<'brand, 'arena, T> {
-    type Target = ptr_t!(T);
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
-/*
-trait EntityFree<'brand, 'arena, V> {
-    fn free(self, dcel: &mut Dcel<'brand, 'arena, V>);
-}*/
-
-pub type Id = Option<usize>;
-
-/*
-pub trait Lens<'tok, 'brand, 'arena, T> {
-    fn item(self) -> ptr_t!(T);
-    fn token(self) -> &'tok GhostToken<'brand>;
-}*/
 
 pub struct Lens<'tok, 'brand, 'arena, T> {
     pub item: ptr_t!(T),
@@ -229,29 +250,16 @@ impl<'tok, 'brand, 'arena, T: Entity<'brand, 'arena>> DoubleEndedIterator
     }
 }
 
-struct ShortDebugEntityIterator<'tok, 'brand, 'arena, T, I>
+struct ShortDebugEntityIterator<I>(I);
+impl<'tok, 'brand, 'arena, T, I> Debug for ShortDebugEntityIterator<I>
 where
     'brand: 'tok + 'arena,
-    T: 'arena,
-    I: Iterator<Item = lens_t!(T)> + Clone,
-{
-    type_name: &'static str,
-    iter: I,
-}
-
-impl<'tok, 'brand, 'arena, T, I> Debug for ShortDebugEntityIterator<'tok, 'brand, 'arena, T, I>
-where
-    'brand: 'tok + 'arena,
-    T: Entity<'brand, 'arena>,
+    T: Entity<'brand, 'arena> + 'arena,
     I: Iterator<Item = lens_t!(T)> + Clone,
 {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         f.debug_list()
-            .entries(
-                self.iter
-                    .clone()
-                    .map(|x| short_debug(self.type_name, x.id())),
-            )
+            .entries(self.0.clone().map(|x| short_debug(T::type_name(), x.id())))
             .finish()
     }
 }
@@ -259,6 +267,8 @@ where
 // trait for a kind of topological element (i.e. Vertex, HalfEdge, Face)
 trait Entity<'brand, 'arena>: Eq {
     type Init;
+
+    fn type_name() -> &'static str;
 
     fn new(id: usize, init: Self::Init) -> Self;
 
@@ -342,6 +352,10 @@ macro_rules! entity {
 
 			impl<'brand, 'arena, V> Entity<'brand, 'arena> for $T<'brand, 'arena, V> {
 				type Init = $arg_ty;
+
+				fn type_name() -> &'static str {
+					stringify!($T)
+				}
 
 				fn get_id(&self) -> Id {
 					self.id
@@ -617,7 +631,7 @@ impl<'brand, 'arena, T: Entity<'brand, 'arena>> Allocator<'brand, 'arena, T> {
             *ptr.borrow_mut(token.as_mut()) = t;
             ptr
         } else {
-            Own::unsafe_make_owned(GhostCell::from_mut(self.arena.alloc(t)))
+            Own::unsafe_make_owned(Ptr(GhostCell::from_mut(self.arena.alloc(t))))
         }
     }
 
@@ -828,7 +842,7 @@ impl<'brand, 'arena, V: Debug> Dcel<'brand, 'arena, V> {
         he1.set_edge(self, *edge);
         he2.set_edge(self, *edge);
 
-        (edge, [&he1, &he2])
+        (edge, [he1, he2])
     }
 
     #[inline(always)]
@@ -1346,10 +1360,7 @@ fn main() {
         println!("{:?}", op.vertices[1].lens(&dcel));
         println!("{:?}", op.loop_.lens(&dcel));
         dbg!(op.loop_.iter_half_edges(&dcel).rev().collect::<Vec<_>>());
-        dbg!(ShortDebugEntityIterator {
-            type_name: "HalfEdge",
-            iter: op.loop_.iter_half_edges(&dcel),
-        });
+        dbg!(ShortDebugEntityIterator(op.loop_.iter_half_edges(&dcel)));
         println!("{:?}", op.face.lens(&dcel));
         println!("{:?}", op.shell.lens(&dcel));
 
