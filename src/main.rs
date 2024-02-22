@@ -11,7 +11,7 @@ use std::fmt::{self, Debug, Formatter};
 pub use typed_arena::Arena;
 
 pub mod ext {
-    pub use super::{AsLens, BodyExt, EdgeExt, FaceExt, HalfEdgeExt, LoopExt, ShellExt, VertexExt};
+    pub use super::{BodyExt, EdgeExt, FaceExt, HalfEdgeExt, LoopExt, ShellExt, VertexExt};
 }
 
 pub trait ReflAsRef<T> {
@@ -24,7 +24,7 @@ impl<T> ReflAsRef<T> for T {
     }
 }
 
-pub trait ReflAsMut<T> {
+pub trait ReflAsMut<T>: ReflAsRef<T> {
     fn as_mut(&mut self) -> &mut T;
 }
 
@@ -57,38 +57,6 @@ macro_rules! ptr {
 	};
 }
 
-pub struct Ptr<'brand, 'arena, T: ?Sized>(pub &'arena GhostCell<'brand, T>);
-
-impl<'brand, 'arena, T: ?Sized> Clone for ptr_t!(T) {
-    fn clone(&self) -> Self {
-        Self(self.0)
-    }
-}
-impl<'brand, 'arena, T: ?Sized> Copy for ptr_t!(T) {}
-
-impl<'brand, 'arena, T: ?Sized> ptr_t!(T) {
-    pub fn borrow<'tok, 'out>(&self, token: &'tok impl ReflAsRef<GhostToken<'brand>>) -> &'out T
-    where
-        'brand: 'out,
-        'arena: 'out,
-        'tok: 'out,
-    {
-        self.0.borrow(token.as_ref())
-    }
-
-    pub fn borrow_mut<'tok, 'out>(
-        &self,
-        token: &'tok mut impl ReflAsMut<GhostToken<'brand>>,
-    ) -> &'out mut T
-    where
-        'brand: 'out,
-        'arena: 'out,
-        'tok: 'out,
-    {
-        self.0.borrow_mut(token.as_mut())
-    }
-}
-
 macro_rules! own_t {
 	($T:ty) => {
 		Own<'brand, 'arena, $T>
@@ -99,6 +67,100 @@ macro_rules! own {
 	($T:ident) => {
 		Own<'brand, 'arena, $T<'brand, 'arena, V>>
 	};
+}
+
+macro_rules! lens_t {
+	($T:ty) => {
+		Lens<'tok, 'brand, 'arena, $T>
+	}
+}
+
+macro_rules! lens {
+	($T:ident) => {
+		Lens<'tok, 'brand, 'arena, $T<'brand, 'arena, V>>
+	};
+}
+
+pub struct Ptr<'brand, 'arena, T>(pub &'arena GhostCell<'brand, T>);
+
+impl<'brand, 'arena, T> Clone for ptr_t!(T) {
+    fn clone(&self) -> Self {
+        Self(self.0)
+    }
+}
+impl<'brand, 'arena, T> Copy for ptr_t!(T) {}
+
+impl<'brand, 'arena, T> ptr_t!(T) {
+    pub fn borrow<'tok, 'out>(self, token: &'tok impl ReflAsRef<GhostToken<'brand>>) -> &'out T
+    where
+        'brand: 'out,
+        'arena: 'out,
+        'tok: 'out,
+    {
+        self.0.borrow(token.as_ref())
+    }
+
+    pub fn borrow_mut<'tok, 'out>(
+        self,
+        token: &'tok mut impl ReflAsMut<GhostToken<'brand>>,
+    ) -> &'out mut T
+    where
+        'brand: 'out,
+        'arena: 'out,
+        'tok: 'out,
+    {
+        self.0.borrow_mut(token.as_mut())
+    }
+
+    pub fn lens<'tok>(self, token: &'tok impl ReflAsRef<GhostToken<'brand>>) -> lens_t!(T) {
+        Lens::new(self, token)
+    }
+}
+
+impl<'brand, 'arena, T: Entity<'brand, 'arena>> ptr_t!(T) {
+    fn clear(self, token: &mut impl ReflAsMut<GhostToken<'brand>>) {
+        self.borrow_mut(token).clear()
+    }
+
+    pub fn id(self, token: &impl ReflAsRef<GhostToken<'brand>>) -> usize {
+        self.borrow(token).id()
+    }
+    fn maybe_id(self, token: &impl ReflAsRef<GhostToken<'brand>>) -> Option<usize> {
+        self.borrow(token).maybe_id()
+    }
+    fn alive(self, token: &impl ReflAsRef<GhostToken<'brand>>) -> bool {
+        self.borrow(token).alive()
+    }
+
+    pub fn eq(self, other: Self, token: &impl ReflAsRef<GhostToken<'brand>>) -> bool {
+        self.borrow(token) == other.borrow(token)
+    }
+
+    fn next(self, token: &impl ReflAsRef<GhostToken<'brand>>) -> Self {
+        self.borrow(token).next()
+    }
+    fn maybe_next(self, token: &impl ReflAsRef<GhostToken<'brand>>) -> Option<Self> {
+        self.borrow(token).maybe_next()
+    }
+    fn set_next(self, x: Self, token: &mut impl ReflAsMut<GhostToken<'brand>>) {
+        self.borrow_mut(token).set_next(x)
+    }
+    fn set_next_opt(self, x: Option<Self>, token: &mut impl ReflAsMut<GhostToken<'brand>>) {
+        self.borrow_mut(token).set_next_opt(x)
+    }
+
+    fn prev(self, token: &impl ReflAsRef<GhostToken<'brand>>) -> Self {
+        self.borrow(token).prev()
+    }
+    fn maybe_prev(self, token: &impl ReflAsRef<GhostToken<'brand>>) -> Option<Self> {
+        self.borrow(token).maybe_prev()
+    }
+    fn set_prev(self, x: Self, token: &mut impl ReflAsMut<GhostToken<'brand>>) {
+        self.borrow_mut(token).set_prev(x)
+    }
+    fn set_prev_opt(self, x: Option<Self>, token: &mut impl ReflAsMut<GhostToken<'brand>>) {
+        self.borrow_mut(token).set_prev_opt(x)
+    }
 }
 
 pub struct Own<'brand, 'arena, T>(ptr_t!(T));
@@ -116,20 +178,6 @@ impl<'brand, 'arena, T> Deref for own_t!(T) {
     fn deref(&self) -> &Self::Target {
         &self.0
     }
-}
-
-pub type Id = Option<usize>;
-
-macro_rules! lens_t {
-	($T:ty) => {
-		Lens<'tok, 'brand, 'arena, $T>
-	}
-}
-
-macro_rules! lens {
-	($T:ident) => {
-		Lens<'tok, 'brand, 'arena, $T<'brand, 'arena, V>>
-	};
 }
 
 pub struct Lens<'tok, 'brand, 'arena, T> {
@@ -166,34 +214,35 @@ impl<'tok, 'brand, 'arena, T> lens_t!(T) {
     }
 }
 
-impl<'tok, 'brand, 'arena, T> lens_t!(T)
-where
-    T: Entity<'brand, 'arena>,
-{
+impl<'tok, 'brand, 'arena, T: Entity<'brand, 'arena>> lens_t!(T) {
     pub fn id(self) -> usize {
-        self.item.borrow(self.token).get_id().unwrap()
+        self.item.id(self.token)
+    }
+    fn maybe_id(self) -> Option<usize> {
+        self.item.maybe_id(self.token)
+    }
+    fn alive(self) -> bool {
+        self.item.alive(self.token)
     }
 
     pub fn eq(self, other: ptr_t!(T)) -> bool {
-        self == Lens::new(other, self.token)
+        self.item.eq(other, self.token)
     }
 
-    fn _prev(self) -> Self {
-        Lens::new(self.item.borrow(self.token).prev().unwrap(), self.token)
+    fn next(self) -> Self {
+        self.item.next(self.token).lens(self.token)
+    }
+    fn maybe_next(self) -> Option<Self> {
+        self.item.maybe_next(self.token).map(|x| x.lens(self.token))
     }
 
-    fn _next(self) -> Self {
-        Lens::new(self.item.borrow(self.token).next().unwrap(), self.token)
+    fn prev(self) -> Self {
+        self.item.prev(self.token).lens(self.token)
+    }
+    fn maybe_prev(self) -> Option<Self> {
+        self.item.maybe_prev(self.token).map(|x| x.lens(self.token))
     }
 }
-
-pub trait AsLens<'tok, 'brand> {
-    type Lens;
-
-    fn lens(self, token: &'tok impl ReflAsRef<GhostToken<'brand>>) -> Self::Lens;
-}
-
-use std::marker::PhantomData;
 
 pub struct EntityIterator<'tok, 'brand, 'arena, T>(Option<(lens_t!(T), lens_t!(T))>);
 
@@ -209,7 +258,7 @@ impl<'tok, 'brand, 'arena, T: Entity<'brand, 'arena>> EntityIterator<'tok, 'bran
     fn new(token: &'tok impl ReflAsRef<GhostToken<'brand>>, start: Option<ptr_t!(T)>) -> Self {
         Self(start.map(|s| {
             let l = Lens::new(s, token);
-            (l, l._prev())
+            (l, l.prev())
         }))
     }
 }
@@ -226,7 +275,7 @@ impl<'tok, 'brand, 'arena, T: Entity<'brand, 'arena>> Iterator
         if range.0 == range.1 {
             self.0 = None;
         } else {
-            range.0 = range.0._next();
+            range.0 = range.0.next();
         }
 
         Some(ret)
@@ -243,7 +292,7 @@ impl<'tok, 'brand, 'arena, T: Entity<'brand, 'arena>> DoubleEndedIterator
         if range.0 == range.1 {
             self.0 = None;
         } else {
-            range.1 = range.1._prev();
+            range.1 = range.1.prev();
         }
 
         Some(ret)
@@ -265,25 +314,39 @@ where
 }
 
 // trait for a kind of topological element (i.e. Vertex, HalfEdge, Face)
-trait Entity<'brand, 'arena>: Eq {
+trait Entity<'brand, 'arena>: Eq + Sized {
     type Init;
+
+    fn new(id: usize, init: Self::Init) -> Self;
+    fn clear(&mut self);
 
     fn type_name() -> &'static str;
 
-    fn new(id: usize, init: Self::Init) -> Self;
-
-    fn is_alive(&self) -> bool {
-        self.get_id().is_some()
+    fn maybe_id(&self) -> Option<usize>;
+    fn id(&self) -> usize {
+        self.maybe_id().unwrap()
+    }
+    fn alive(&self) -> bool {
+        self.maybe_id().is_some()
     }
 
-    fn get_id(&self) -> Id;
-    fn clear(&mut self);
+    fn maybe_next(&self) -> Option<ptr_t!(Self)>;
+    fn next(&self) -> ptr_t!(Self) {
+        self.maybe_next().unwrap()
+    }
+    fn set_next(&mut self, x: ptr_t!(Self)) {
+        self.set_next_opt(Some(x));
+    }
+    fn set_next_opt(&mut self, x: Option<ptr_t!(Self)>);
 
-    fn next(&self) -> Option<ptr_t!(Self)>;
-    fn prev(&self) -> Option<ptr_t!(Self)>;
-
-    fn next_mut(&mut self) -> &mut Option<ptr_t!(Self)>;
-    fn prev_mut(&mut self) -> &mut Option<ptr_t!(Self)>;
+    fn maybe_prev(&self) -> Option<ptr_t!(Self)>;
+    fn prev(&self) -> ptr_t!(Self) {
+        self.maybe_prev().unwrap()
+    }
+    fn set_prev(&mut self, x: ptr_t!(Self)) {
+        self.set_prev_opt(Some(x));
+    }
+    fn set_prev_opt(&mut self, x: Option<ptr_t!(Self)>);
 
     fn list_add(
         this: ptr_t!(Self),
@@ -291,32 +354,32 @@ trait Entity<'brand, 'arena>: Eq {
         token: &mut impl ReflAsMut<GhostToken<'brand>>,
     ) -> ptr_t!(Self) {
         let (next, prev) = if let Some(first) = list {
-            (first, first.borrow(token.as_mut()).prev().unwrap())
+            (first, first.prev(token))
         } else {
             (this, this)
         };
 
-        *this.borrow_mut(token.as_mut()).next_mut() = Some(next);
-        *this.borrow_mut(token.as_mut()).prev_mut() = Some(prev);
-        *prev.borrow_mut(token.as_mut()).next_mut() = Some(this);
-        *next.borrow_mut(token.as_mut()).prev_mut() = Some(this);
+        this.set_next(next, token);
+        this.set_prev(prev, token);
+        prev.set_next(this, token);
+        next.set_prev(this, token);
 
         next
     }
 
     fn list_remove(
         this: ptr_t!(Self),
-        token: &mut (impl ReflAsMut<GhostToken<'brand>> + ReflAsRef<GhostToken<'brand>>),
+        token: &mut impl ReflAsMut<GhostToken<'brand>>,
     ) -> Option<ptr_t!(Self)> {
-        let next = this.borrow(token.as_mut()).next().unwrap();
-        let prev = this.borrow(token.as_mut()).prev().unwrap();
+        let next = this.next(token);
+        let prev = this.prev(token);
 
-        if this.borrow((&*token).as_ref()) == next.borrow((&*token).as_ref()) {
+        if this.eq(next, token) {
             return None;
         }
 
-        *prev.borrow_mut(token.as_mut()).next_mut() = Some(next);
-        *next.borrow_mut(token.as_mut()).prev_mut() = Some(prev);
+        prev.set_next(next, token);
+        next.set_prev(prev, token);
 
         Some(next)
     }
@@ -343,7 +406,7 @@ macro_rules! entity {
 	) => {
 		paste! {
 			pub struct $T<'brand, 'arena, V> {
-				id: Id,
+				id: Option<usize>,
 				next: Option<ptr!($T)>,
 				prev: Option<ptr!($T)>,
 				$($($init_field: $init_ty,)*)?
@@ -352,14 +415,6 @@ macro_rules! entity {
 
 			impl<'brand, 'arena, V> Entity<'brand, 'arena> for $T<'brand, 'arena, V> {
 				type Init = $arg_ty;
-
-				fn type_name() -> &'static str {
-					stringify!($T)
-				}
-
-				fn get_id(&self) -> Id {
-					self.id
-				}
 
 				fn new(id: usize, $arg_name: $arg_ty) -> Self {
 					Self {
@@ -381,34 +436,33 @@ macro_rules! entity {
 					}
 				}
 
-				fn next(&self) -> Option<ptr_t!(Self)> {
+				fn type_name() -> &'static str {
+					stringify!($T)
+				}
+
+				fn maybe_id(&self) -> Option<usize> {
+					self.id
+				}
+
+				fn maybe_next(&self) -> Option<ptr_t!(Self)> {
 					self.next
 				}
 
-				fn prev(&self) -> Option<ptr_t!(Self)> {
+				fn set_next_opt(&mut self, x: Option<ptr_t!(Self)>) {
+					self.next = x;
+				}
+
+				fn maybe_prev(&self) -> Option<ptr_t!(Self)> {
 					self.prev
 				}
 
-				fn next_mut(&mut self) -> &mut Option<ptr_t!(Self)> {
-					&mut self.next
-				}
-
-				fn prev_mut(&mut self) -> &mut Option<ptr_t!(Self)> {
-					&mut self.prev
+				fn set_prev_opt(&mut self, x: Option<ptr_t!(Self)>) {
+					self.prev = x;
 				}
 			}
 
 			trait [<$T PrivExt>]<'brand, 'arena, V>: Copy {
 				fn as_self(self) -> ptr!($T);
-
-				fn _prev(self, token: &impl ReflAsRef<GhostToken<'brand>>) -> ptr!($T) {
-					self.as_self().borrow(token.as_ref()).prev.unwrap()
-				}
-
-				fn _next(self, token: &impl ReflAsRef<GhostToken<'brand>>) -> ptr!($T) {
-					self.as_self().borrow(token.as_ref()).next.unwrap()
-				}
-
 
 				$($(
 					fn [<_ $field>](self, token: &impl ReflAsRef<GhostToken<'brand>>) -> ptr!($field_ty) {
@@ -416,7 +470,7 @@ macro_rules! entity {
 					}
 
 					fn [<maybe_ $field>](self, token: &impl ReflAsRef<GhostToken<'brand>>) -> Option<ptr!($field_ty)> {
-						self.as_self().borrow(token.as_ref()).$field
+						self.as_self().borrow(token).$field
 					}
 
 
@@ -425,13 +479,13 @@ macro_rules! entity {
 					}
 
 					fn [<set_opt_ $field>](self, token: &mut impl ReflAsMut<GhostToken<'brand>>, x: Option<ptr!($field_ty)>) {
-						self.as_self().borrow_mut(token.as_mut()).$field = x;
+						self.as_self().borrow_mut(token).$field = x;
 					}
 
 					$(
 						fn [<add_ $list_singular>](
 							self,
-							token: &mut (impl ReflAsMut<GhostToken<'brand>> + ReflAsRef<GhostToken<'brand>>),
+							token: &mut impl ReflAsMut<GhostToken<'brand>>,
 							x: ptr!($field_ty),
 						) {
 							let list = Entity::list_add(x, self.[<maybe_ $field>](token), token);
@@ -471,7 +525,7 @@ macro_rules! entity {
 				$($(
 					$(
 						$func $field(self, token: &impl ReflAsRef<GhostToken<'brand>>) -> ptr!($field_ty) {
-							self.as_self().borrow(token.as_ref()).$field.unwrap()
+							self.as_self().borrow(token).$field.unwrap()
 						}
 					)?
 
@@ -499,7 +553,7 @@ macro_rules! entity {
 						'brand: 'arena,
 						V: 'arena,
 					{
-						&self.as_self().borrow(token.as_ref()).$init_field
+						&self.as_self().borrow(token).$init_field
 					}
 
 					$init_func [<mut_ $init_field>]<'tok, 'out>(
@@ -512,7 +566,7 @@ macro_rules! entity {
 						'brand: 'arena,
 						V: 'arena,
 					{
-						&mut self.as_self().borrow_mut(token.as_mut()).$init_field
+						&mut self.as_self().borrow_mut(token).$init_field
 					}
 				)?)*)?
 			}
@@ -523,24 +577,12 @@ macro_rules! entity {
 				}
 			}
 
-			impl<'tok, 'brand: 'tok, 'arena, V> AsLens<'tok, 'brand> for ptr!($T) {
-				type Lens = lens!($T);
-
-				fn lens(
-					self,
-					token: &'tok impl ReflAsRef<GhostToken<'brand>>
-				) -> Self::Lens
-				{
-					Self::Lens::new(self, token)
-				}
-			}
-
 			impl<'tok, 'brand, 'arena, V: Debug> Debug for lens!($T) {
 				fn fmt(&self, f: &mut Formatter) -> fmt::Result {
 					f.debug_struct(stringify!($T))
 						.field("id", &self.id())
-						.field("prev", &short_debug(stringify!($T), self._prev().id()))
-						.field("next", &short_debug(stringify!($T), self._next().id()))
+						.field("prev", &short_debug(stringify!($T), self.prev().id()))
+						.field("next", &short_debug(stringify!($T), self.next().id()))
 						$($(
 							.field(stringify!($field),
 								&short_debug(stringify!($field_ty), self.[<_ $field>]().id()))
@@ -595,7 +637,7 @@ macro_rules! entity {
 
 		impl<'brand, 'arena, V> PartialEq for $T<'brand, 'arena, V> {
 			fn eq(&self, other: &Self) -> bool {
-				self.get_id() == other.get_id()
+				self.id() == other.id()
 			}
 		}
 		impl<'brand, 'arena, V> Eq for $T<'brand, 'arena, V> {}
@@ -628,7 +670,7 @@ impl<'brand, 'arena, T: Entity<'brand, 'arena>> Allocator<'brand, 'arena, T> {
         let t = Entity::new(id, init);
 
         if let Some(ptr) = self.freelist.pop() {
-            *ptr.borrow_mut(token.as_mut()) = t;
+            *ptr.borrow_mut(token) = t;
             ptr
         } else {
             Own::unsafe_make_owned(Ptr(GhostCell::from_mut(self.arena.alloc(t))))
@@ -636,8 +678,8 @@ impl<'brand, 'arena, T: Entity<'brand, 'arena>> Allocator<'brand, 'arena, T> {
     }
 
     fn free(&mut self, token: &mut impl ReflAsMut<GhostToken<'brand>>, ptr: own_t!(T)) {
-        debug_assert!(ptr.borrow(token.as_mut()).is_alive(), "double free");
-        ptr.borrow_mut(token.as_mut()).clear();
+        debug_assert!(ptr.alive(token), "double free");
+        ptr.clear(token);
         self.freelist.push(ptr);
     }
 }
@@ -648,6 +690,7 @@ entity!(vertex: Vertex,
     outgoing: HalfEdge
 );
 
+// TODO: target
 entity!(half_edge: HalfEdge,
     init: ();
     origin fn: Vertex,
@@ -685,7 +728,7 @@ entity!(edge: Edge {
             ) -> [ptr!(HalfEdge); 2]
             {
                 let he = self.as_self()
-                    .borrow(token.as_ref())
+                    .borrow(token)
                     .half_edges
                     .as_ref()
                     .unwrap();
@@ -862,24 +905,6 @@ impl<'brand, 'arena, V: Debug> Dcel<'brand, 'arena, V> {
             EulerOp::Mevvlfs(x) => self.kevvlfs(x),
         }
     }
-
-    pub fn edge_points(&self, edge: ptr!(Edge)) -> [ptr!(Vertex); 2] {
-        /*
-
-        #![feature(array_methods)]
-        edge.borrow(&self.token)
-            .half_edges
-            .as_ref()
-            .unwrap()
-            .each_ref()
-            .map(|x| x.borrow(&self.token).origin.unwrap())
-
-        */
-
-        let he = edge.borrow(&self.token).half_edges.as_ref().unwrap();
-        [&he[0], &he[1]].map(|x| x.borrow(&self.token).origin.unwrap())
-    }
-
     /*
     pub fn equals<'a, 'b, 'slf: 'a + 'b, T: Entity<'brand, 'arena> + 'arena>(
         &'slf self,
@@ -889,14 +914,6 @@ impl<'brand, 'arena, V: Debug> Dcel<'brand, 'arena, V> {
         a.borrow(&self.token) == b.borrow(&self.token)
     }
     */
-
-    pub fn equals<T: Eq>(&self, a: ptr_t!(T), b: ptr_t!(T)) -> bool {
-        a.borrow(&self.token) == b.borrow(&self.token)
-    }
-
-    pub fn half_edge_target(&self, he: ptr!(HalfEdge)) -> ptr!(Vertex) {
-        he.twin(self).origin(self)
-    }
 
     pub fn iter_outgoing<T>(
         &mut self,
@@ -911,10 +928,10 @@ impl<'brand, 'arena, V: Debug> Dcel<'brand, 'arena, V> {
                 return Some(x);
             }
 
-            he = he.twin(self)._next(self);
+            he = he.twin(self).next(self);
             // debug_assert!(he.origin())
 
-            !self.equals(orig, he)
+            !orig.eq(he, self)
         } {}
 
         None
@@ -961,19 +978,19 @@ impl<'brand, 'arena, V: Debug> Dcel<'brand, 'arena, V> {
 
             assert!([a.origin(), b.origin()] == [v1, v2] || [a.origin(), b.origin()] == [v2, v1]);
 
-            assert_eq!(a._next(), b);
-            assert_eq!(b._next(), a);
+            assert_eq!(a.next(), b);
+            assert_eq!(b.next(), a);
             assert_eq!(a.loop_(), loop_);
 
             assert_eq!(face._outer_loops(), loop_);
             assert!(face.maybe_inner_loops().is_none());
 
-            assert_eq!(face._next(), face);
+            assert_eq!(face.next(), face);
             assert_eq!(shell._faces(), face);
         }
 
         let shells = Entity::list_remove(*shell, self);
-        shell._body(self).set_opt_shells(self, shells);
+        shell.body(self).set_opt_shells(self, shells);
 
         edge.free(self);
         a.free(self);
@@ -1352,8 +1369,8 @@ fn main() {
         let body = dcel.new_body();
         // Mevvlfs(a, [w, n], l, f, s)
         let op = dcel.mevvlfs(*body, [("W", [-4, 0]), ("N", [0, 4])]);
-        println!("{}", dcel.equals(*op.vertices[0], *op.vertices[1]));
-        println!("{}", dcel.equals(*op.vertices[0], *op.vertices[0]));
+        println!("{}", op.vertices[0].eq(*op.vertices[0], &dcel));
+        println!("{}", op.vertices[0].eq(*op.vertices[1], &dcel));
 
         println!("{:?}", op.edge.lens(&dcel));
         println!("{:?}", op.vertices[0].lens(&dcel));
