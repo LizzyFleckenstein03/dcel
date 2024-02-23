@@ -73,8 +73,20 @@ macro_rules! lens {
 	};
 }
 
-fn short_debug(ty: &'static str, id: usize) -> impl Debug {
-    DebugFn(move |f| f.debug_tuple(ty).field(&id).finish())
+fn _short_debug(ty: &'static str, id: usize, f: &mut Formatter) -> fmt::Result {
+    f.debug_tuple(ty).field(&id).finish()
+}
+
+fn short_debug<'tok, 'brand, 'arena, T: Entity<'brand, 'arena>>(
+    x: lens_t!(T),
+    f: &mut Formatter,
+) -> fmt::Result {
+    _short_debug(T::type_name(), x.id(), f)
+}
+
+fn short_debug_fn<'tok, 'brand, 'arena, T: Entity<'brand, 'arena>>(x: lens_t!(T)) -> impl Debug {
+    let id = x.id();
+    DebugFn(move |f| _short_debug(T::type_name(), id, f))
 }
 
 fn short_debug_list<'tok, 'brand, 'arena, T, I>(iter: I, f: &mut Formatter) -> fmt::Result
@@ -83,9 +95,7 @@ where
     T: Entity<'brand, 'arena> + 'arena,
     I: Iterator<Item = lens_t!(T)>,
 {
-    f.debug_list()
-        .entries(iter.map(|x| short_debug(T::type_name(), x.id())))
-        .finish()
+    f.debug_list().entries(iter.map(short_debug_fn)).finish()
 }
 
 pub struct Ptr<'brand, 'arena, T>(pub &'arena GhostCell<'brand, T>);
@@ -509,11 +519,10 @@ macro_rules! entity {
 				fn fmt(&self, f: &mut Formatter) -> fmt::Result {
 					f.debug_struct(stringify!($T))
 						.field("id", &self.id())
-						.field("prev", &short_debug(stringify!($T), self.prev().id()))
-						.field("next", &short_debug(stringify!($T), self.next().id()))
+						.field("prev", &short_debug_fn(self.prev()))
+						.field("next", &short_debug_fn(self.next()))
 						$($(
-							.field(stringify!($field),
-								&short_debug(stringify!($field_ty), self.$field().id()))
+							.field(stringify!($field), &DebugFn(|f| self.[<debug_ $field>](f)))
 						)*)?
 						$($(
 							.field(stringify!($init_field), &DebugFn(|f| self.[<debug_ $init_field>](f)))
@@ -532,9 +541,22 @@ macro_rules! entity {
 						self.item.[<maybe_ $field>](&self).map(|x| x.lens(self.token))
 					}
 
-					/*fn [<debug_ $field>](self) -> impl std::fmt::Debug {
-						short_debug(stringify!($field_ty), self.[<_ $field>]().id())
-					}*/
+					$(
+						pub fn [<iter_ $field>](self) -> EntityIterator<'tok, 'brand, 'arena, $field_ty<'brand, 'arena, V>> {
+							let [<_ $list_singular>] = ();
+							self.item.[<iter_ $field>](self.token)
+						}
+					)?
+
+					fn [<debug_ $field>](self, f: &mut Formatter) -> fmt::Result {
+						$({
+							let [<_ $list_singular>] = ();
+							if true {
+								return short_debug_list(self.[<iter_ $field>](), f);
+							}
+						})?
+						short_debug(self.$field(), f)
+					}
 				)*)?
 			}
 		}
@@ -640,6 +662,18 @@ entity!(half_edge: HalfEdge,
     pub edge: Edge
 );
 
+impl<'brand, 'arena, V> ptr!(HalfEdge) {
+    pub fn target(self, token: &impl ReflAsRef<GhostToken<'brand>>) -> ptr!(Vertex) {
+        self.twin(token).origin(token)
+    }
+}
+
+impl<'tok, 'brand, 'arena, V> lens!(HalfEdge) {
+    pub fn target(self) -> lens!(Vertex) {
+        self.item.target(&self).lens(self.token)
+    }
+}
+
 entity!(loop_: Loop,
     init: ();
     half_edges[half_edge: half_edge back]: HalfEdge,
@@ -652,12 +686,12 @@ entity!(edge: Edge,
 );
 
 impl<'brand, 'arena, V> ptr!(Edge) {
-    fn half_edges(self, token: &impl ReflAsRef<GhostToken<'brand>>) -> [ptr!(HalfEdge); 2] {
+    pub fn half_edges(self, token: &impl ReflAsRef<GhostToken<'brand>>) -> [ptr!(HalfEdge); 2] {
         let he = self.borrow(token).half_edges.as_ref().unwrap();
         [*he[0], *he[1]]
     }
 
-    fn vertices(self, token: &impl ReflAsRef<GhostToken<'brand>>) -> [ptr!(Vertex); 2] {
+    pub fn vertices(self, token: &impl ReflAsRef<GhostToken<'brand>>) -> [ptr!(Vertex); 2] {
         self.half_edges(token).map(|x| x.origin(token))
     }
 }
