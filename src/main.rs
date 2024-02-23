@@ -1,8 +1,4 @@
-#![allow(unused)]
 #![allow(private_bounds)]
-// the ptr! macro will expand to complex types but makes things easier to read for humans
-// unlike type definitions, a macro can capture the 'brand and 'arena lifetimes from the scope
-#![allow(clippy::type_complexity)]
 
 use core::ops::Deref;
 pub use ghost_cell::{GhostBorrow, GhostCell, GhostToken};
@@ -37,39 +33,52 @@ impl<F: Fn(&mut Formatter) -> fmt::Result> Debug for DebugFn<F> {
     }
 }
 
+#[macro_export]
 macro_rules! ptr_t {
 	($T:ty) => {
 		Ptr<'brand, 'arena, $T>
 	}
 }
 
+#[macro_export]
 macro_rules! ptr {
 	($T:ident) => {
 		Ptr<'brand, 'arena, $T<'brand, 'arena, V>>
 	};
 }
 
+#[macro_export]
 macro_rules! own_t {
 	($T:ty) => {
 		Own<'brand, 'arena, $T>
 	}
 }
 
+#[macro_export]
 macro_rules! own {
 	($T:ident) => {
 		Own<'brand, 'arena, $T<'brand, 'arena, V>>
 	};
 }
 
+#[macro_export]
 macro_rules! lens_t {
 	($T:ty) => {
 		Lens<'tok, 'brand, 'arena, $T>
 	}
 }
 
+#[macro_export]
 macro_rules! lens {
 	($T:ident) => {
 		Lens<'tok, 'brand, 'arena, $T<'brand, 'arena, V>>
+	};
+}
+
+#[macro_export]
+macro_rules! mklens {
+	($token: expr, $($name:ident),*) => {
+		$( let $name = $name.lens($token); )*
 	};
 }
 
@@ -132,6 +141,7 @@ impl<'brand, 'arena, T> ptr_t!(T) {
     }
 }
 
+#[allow(unused)]
 impl<'brand, 'arena, T: Entity<'brand, 'arena>> ptr_t!(T) {
     fn clear(self, token: &mut impl ReflAsMut<GhostToken<'brand>>) {
         self.borrow_mut(token).clear()
@@ -220,6 +230,12 @@ impl<'tok, 'brand, 'arena, T> ReflAsRef<GhostToken<'brand>> for lens_t!(T) {
     }
 }
 
+impl<'tok, 'brand, 'arena, T> From<lens_t!(T)> for ptr_t!(T) {
+    fn from(x: lens_t!(T)) -> Self {
+        x.item
+    }
+}
+
 impl<'tok, 'brand, 'arena, T> lens_t!(T) {
     pub fn new(item: ptr_t!(T), token: &'tok impl ReflAsRef<GhostToken<'brand>>) -> Self {
         Self {
@@ -229,6 +245,7 @@ impl<'tok, 'brand, 'arena, T> lens_t!(T) {
     }
 }
 
+#[allow(unused)]
 impl<'tok, 'brand, 'arena, T: Entity<'brand, 'arena>> lens_t!(T) {
     pub fn id(self) -> usize {
         self.item.id(&self)
@@ -270,7 +287,7 @@ impl<'tok, 'brand, 'arena, T> Clone for EntityIterator<'tok, 'brand, 'arena, T> 
 impl<'tok, 'brand, 'arena, T> Copy for EntityIterator<'tok, 'brand, 'arena, T> {}
 
 impl<'tok, 'brand, 'arena, T: Entity<'brand, 'arena>> EntityIterator<'tok, 'brand, 'arena, T> {
-    fn new(token: &'tok impl ReflAsRef<GhostToken<'brand>>, start: Option<ptr_t!(T)>) -> Self {
+    fn new(start: Option<ptr_t!(T)>, token: &'tok impl ReflAsRef<GhostToken<'brand>>) -> Self {
         Self(start.map(|s| {
             let l = Lens::new(s, token);
             (l, l.prev())
@@ -284,7 +301,7 @@ impl<'tok, 'brand, 'arena, T: Entity<'brand, 'arena>> Iterator
     type Item = lens_t!(T);
 
     fn next(&mut self) -> Option<Self::Item> {
-        let mut range = self.0.as_mut()?;
+        let range = self.0.as_mut()?;
         let ret = range.0;
 
         if range.0 == range.1 {
@@ -301,7 +318,7 @@ impl<'tok, 'brand, 'arena, T: Entity<'brand, 'arena>> DoubleEndedIterator
     for EntityIterator<'tok, 'brand, 'arena, T>
 {
     fn next_back(&mut self) -> Option<Self::Item> {
-        let mut range = self.0.as_mut()?;
+        let range = self.0.as_mut()?;
         let ret = range.1;
 
         if range.0 == range.1 {
@@ -386,12 +403,6 @@ trait Entity<'brand, 'arena>: Eq + Sized {
     }
 }
 
-macro_rules! mklens {
-	($token: expr, $($name:ident),*) => {
-		$( let $name = $name.lens($token); )*
-	};
-}
-
 macro_rules! entity {
 	($name:ident : $T:ident,
 		$arg_name:ident: $arg_ty:ty
@@ -401,166 +412,165 @@ macro_rules! entity {
 				$([ $list_singular:ident : $list_name:ident  $($list_back:ident)? ])?
 			 : $field_ty:ident ),*
 		)?
-	) => {
-		paste! {
-			pub struct $T<'brand, 'arena, V> {
-				id: Option<usize>,
-				next: Option<ptr!($T)>,
-				prev: Option<ptr!($T)>,
-				$($($init_field: $init_ty,)*)?
-				$($($field: Option<ptr!($field_ty)>,)*)?
-			}
+	) => { paste! {
+		pub struct $T<'brand, 'arena, V> {
+			id: Option<usize>,
+			next: Option<ptr!($T)>,
+			prev: Option<ptr!($T)>,
+			$($($init_field: $init_ty,)*)?
+			$($($field: Option<ptr!($field_ty)>,)*)?
+		}
 
-			impl<'brand, 'arena, V> Entity<'brand, 'arena> for $T<'brand, 'arena, V> {
-				type Init = $arg_ty;
+		impl<'brand, 'arena, V> Entity<'brand, 'arena> for $T<'brand, 'arena, V> {
+			type Init = $arg_ty;
 
-				fn new(id: usize, $arg_name: $arg_ty) -> Self {
-					Self {
-						id: Some(id),
-						prev: None,
-						next: None,
-						$($($init_field: $init_expr,)*)?
-						$($($field: None,)*)?
-					}
-				}
-
-				fn clear(&mut self) {
-					self.id = None;
-					#[cfg(debug_assertions)]
-					{
-						self.prev = None;
-						self.next = None;
-						$($(self.$field = None;)*)?
-					}
-				}
-
-				fn type_name() -> &'static str {
-					stringify!($T)
-				}
-
-				fn maybe_id(&self) -> Option<usize> {
-					self.id
-				}
-
-				fn maybe_next(&self) -> Option<ptr_t!(Self)> {
-					self.next
-				}
-
-				fn set_next_opt(&mut self, x: Option<ptr_t!(Self)>) {
-					self.next = x;
-				}
-
-				fn maybe_prev(&self) -> Option<ptr_t!(Self)> {
-					self.prev
-				}
-
-				fn set_prev_opt(&mut self, x: Option<ptr_t!(Self)>) {
-					self.prev = x;
+			fn new(id: usize, $arg_name: $arg_ty) -> Self {
+				Self {
+					id: Some(id),
+					prev: None,
+					next: None,
+					$($($init_field: $init_expr,)*)?
+					$($($field: None,)*)?
 				}
 			}
 
-			impl<'brand, 'arena, V> ptr!($T) {
-				$($(
-					$field_vis fn $field(self, token: &impl ReflAsRef<GhostToken<'brand>>) -> ptr!($field_ty) {
-						self.[<maybe_ $field>](token).unwrap()
-					}
-
-
-					fn [<maybe_ $field>](self, token: &impl ReflAsRef<GhostToken<'brand>>) -> Option<ptr!($field_ty)> {
-						self.borrow(token).$field
-					}
-
-
-					fn [<set_ $field>](self, token: &mut impl ReflAsMut<GhostToken<'brand>>, x: ptr!($field_ty)) {
-						self.[<set_opt_ $field>](token, Some(x));
-					}
-
-					fn [<set_opt_ $field>](self, token: &mut impl ReflAsMut<GhostToken<'brand>>, x: Option<ptr!($field_ty)>) {
-						self.borrow_mut(token).$field = x;
-					}
-
-					$(
-						pub fn [<iter_ $field>]<'tok>(
-							self,
-							token: &'tok impl ReflAsRef<GhostToken<'brand>>,
-						) -> EntityIterator<'tok, 'brand, 'arena, $field_ty<'brand, 'arena, V>>
-						{
-							EntityIterator::new(token, self.[<maybe_ $field>](token))
-						}
-
-						fn [<add_ $list_singular>](
-							self,
-							token: &mut impl ReflAsMut<GhostToken<'brand>>,
-							x: ptr!($field_ty),
-						) {
-							let list = Entity::list_add(x, self.[<maybe_ $field>](token), token);
-							self.[<set_ $field>](token, list);
-
-							$(
-								let [<_ $list_back>] = ();
-								x.[<set_ $name>](token, self);
-							)?
-						}
-
-						fn [<add_new_ $list_singular>](
-							self,
-							dcel: &mut Dcel<'brand, 'arena, V>,
-							init: <$field_ty<'brand, 'arena, V> as Entity<'brand, 'arena>>::Init,
-						) -> own!($field_ty) {
-							let x = dcel.$list_name.alloc(&mut dcel.token, init);
-							self.[<add_ $list_singular>](dcel, *x);
-							x
-						}
-					)?
-				)*)?
-			}
-
-			impl<'tok, 'brand, 'arena, V: Debug> Debug for lens!($T) {
-				fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-					f.debug_struct(stringify!($T))
-						.field("id", &self.id())
-						.field("prev", &short_debug_fn(self.prev()))
-						.field("next", &short_debug_fn(self.next()))
-						$($(
-							.field(stringify!($field), &DebugFn(|f| self.[<debug_ $field>](f)))
-						)*)?
-						$($(
-							.field(stringify!($init_field), &DebugFn(|f| self.[<debug_ $init_field>](f)))
-						)*)?
-						.finish()
+			fn clear(&mut self) {
+				self.id = None;
+				#[cfg(debug_assertions)]
+				{
+					self.prev = None;
+					self.next = None;
+					$($(self.$field = None;)*)?
 				}
 			}
 
-			impl<'tok, 'brand, 'arena, V> lens!($T) {
-				$($(
-					$field_vis fn $field(self) -> lens!($field_ty) {
-						self.item.$field(&self).lens(self.token)
-					}
+			fn type_name() -> &'static str {
+				stringify!($T)
+			}
 
-					fn [<maybe_ $field>](self) -> Option<lens!($field_ty)> {
-						self.item.[<maybe_ $field>](&self).map(|x| x.lens(self.token))
-					}
+			fn maybe_id(&self) -> Option<usize> {
+				self.id
+			}
 
-					$(
-						pub fn [<iter_ $field>](self) -> EntityIterator<'tok, 'brand, 'arena, $field_ty<'brand, 'arena, V>> {
-							let [<_ $list_singular>] = ();
-							self.item.[<iter_ $field>](self.token)
-						}
-					)?
+			fn maybe_next(&self) -> Option<ptr_t!(Self)> {
+				self.next
+			}
 
-					fn [<debug_ $field>](self, f: &mut Formatter) -> fmt::Result {
-						$({
-							let [<_ $list_singular>] = ();
-							if true {
-								return short_debug_list(self.[<iter_ $field>](), f);
-							}
-						})?
-						short_debug(self.$field(), f)
-					}
-				)*)?
+			fn set_next_opt(&mut self, x: Option<ptr_t!(Self)>) {
+				self.next = x;
+			}
+
+			fn maybe_prev(&self) -> Option<ptr_t!(Self)> {
+				self.prev
+			}
+
+			fn set_prev_opt(&mut self, x: Option<ptr_t!(Self)>) {
+				self.prev = x;
 			}
 		}
 
+		#[allow(unused)]
+		impl<'brand, 'arena, V> ptr!($T) {
+			$($(
+				$field_vis fn $field(self, token: &impl ReflAsRef<GhostToken<'brand>>) -> ptr!($field_ty) {
+					self.[<maybe_ $field>](token).unwrap()
+				}
+
+				fn [<maybe_ $field>](self, token: &impl ReflAsRef<GhostToken<'brand>>) -> Option<ptr!($field_ty)> {
+					self.borrow(token).$field
+				}
+
+				fn [<set_ $field>](self, token: &mut impl ReflAsMut<GhostToken<'brand>>, x: ptr!($field_ty)) {
+					self.[<set_opt_ $field>](token, Some(x));
+				}
+
+				fn [<set_opt_ $field>](self, token: &mut impl ReflAsMut<GhostToken<'brand>>, x: Option<ptr!($field_ty)>) {
+					self.borrow_mut(token).$field = x;
+				}
+
+				$(
+					pub fn [<iter_ $field>]<'tok>(
+						self,
+						token: &'tok impl ReflAsRef<GhostToken<'brand>>,
+					) -> EntityIterator<'tok, 'brand, 'arena, $field_ty<'brand, 'arena, V>>
+					{
+						EntityIterator::new(self.[<maybe_ $field>](token), token)
+					}
+
+					fn [<add_ $list_singular>](
+						self,
+						token: &mut impl ReflAsMut<GhostToken<'brand>>,
+						x: ptr!($field_ty),
+					) {
+						let list = Entity::list_add(x, self.[<maybe_ $field>](token), token);
+						self.[<set_ $field>](token, list);
+
+						$(
+							let [<_ $list_back>] = ();
+							x.[<set_ $name>](token, self);
+						)?
+					}
+
+					fn [<add_new_ $list_singular>](
+						self,
+						dcel: &mut Dcel<'brand, 'arena, V>,
+						init: <$field_ty<'brand, 'arena, V> as Entity<'brand, 'arena>>::Init,
+					) -> own!($field_ty) {
+						let x = dcel.$list_name.alloc(&mut dcel.token, init);
+						self.[<add_ $list_singular>](dcel, *x);
+						x
+					}
+				)?
+			)*)?
+		}
+
+		#[allow(unused)]
+		impl<'tok, 'brand, 'arena, V> lens!($T) {
+			$($(
+				$field_vis fn $field(self) -> lens!($field_ty) {
+					self.item.$field(&self).lens(self.token)
+				}
+
+				fn [<maybe_ $field>](self) -> Option<lens!($field_ty)> {
+					self.item.[<maybe_ $field>](&self).map(|x| x.lens(self.token))
+				}
+
+				$(
+					pub fn [<iter_ $field>](self) -> EntityIterator<'tok, 'brand, 'arena, $field_ty<'brand, 'arena, V>> {
+						let [<_ $list_singular>] = ();
+						self.item.[<iter_ $field>](self.token)
+					}
+				)?
+
+				fn [<debug_ $field>](self, f: &mut Formatter) -> fmt::Result {
+					$({
+						let [<_ $list_singular>] = ();
+						if true {
+							return short_debug_list(self.[<iter_ $field>](), f);
+						}
+					})?
+					short_debug(self.$field(), f)
+				}
+			)*)?
+		}
+
+		impl<'tok, 'brand, 'arena, V: Debug> Debug for lens!($T) {
+			fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+				f.debug_struct(stringify!($T))
+					.field("id", &self.id())
+					.field("prev", &short_debug_fn(self.prev()))
+					.field("next", &short_debug_fn(self.next()))
+					$($(
+						.field(stringify!($field), &DebugFn(|f| self.[<debug_ $field>](f)))
+					)*)?
+					$($(
+						.field(stringify!($init_field), &DebugFn(|f| self.[<debug_ $init_field>](f)))
+					)*)?
+					.finish()
+			}
+		}
+
+		#[allow(unused)]
 		impl<'brand, 'arena, V> Own<'brand, 'arena, $T<'brand, 'arena, V>> {
 			fn free(self, dcel: &mut Dcel<'brand, 'arena, V>) {
 				dcel.$name.free(&mut dcel.token, self)
@@ -573,8 +583,170 @@ macro_rules! entity {
 			}
 		}
 		impl<'brand, 'arena, V> Eq for $T<'brand, 'arena, V> {}
-	};
+	}};
 }
+
+entity!(vertex: Vertex,
+    init: V,
+    data: V = init;
+    outgoing: HalfEdge
+);
+
+pub struct OutgoingIterator<'tok, 'brand, 'arena, V>(Option<(lens!(HalfEdge), lens!(HalfEdge))>);
+
+impl<'tok, 'brand, 'arena, V> Clone for OutgoingIterator<'tok, 'brand, 'arena, V> {
+    fn clone(&self) -> Self {
+        Self(self.0)
+    }
+}
+
+impl<'tok, 'brand, 'arena, V> Copy for OutgoingIterator<'tok, 'brand, 'arena, V> {}
+
+impl<'tok, 'brand, 'arena, V> OutgoingIterator<'tok, 'brand, 'arena, V> {
+    fn new(start: Option<ptr!(HalfEdge)>, token: &'tok impl ReflAsRef<GhostToken<'brand>>) -> Self {
+        Self(start.map(|s| {
+            let l = Lens::new(s, token);
+            (l, l)
+        }))
+    }
+}
+
+impl<'tok, 'brand, 'arena, V> Iterator for OutgoingIterator<'tok, 'brand, 'arena, V> {
+    type Item = lens!(HalfEdge);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let range = self.0.as_mut()?;
+        let ret = range.0;
+
+        range.0 = range.0.twin().next();
+        if range.0 == range.1 {
+            self.0 = None;
+        }
+
+        Some(ret)
+    }
+}
+
+impl<'brand, 'arena, V> ptr!(Vertex) {
+    pub fn data<'tok, 'out>(self, token: &'tok impl ReflAsRef<GhostToken<'brand>>) -> &'out V
+    where
+        'arena: 'out,
+        'tok: 'out,
+    {
+        &self.borrow(token).data
+    }
+
+    pub fn mut_data<'tok, 'out>(
+        self,
+        token: &'tok mut impl ReflAsMut<GhostToken<'brand>>,
+    ) -> &'out mut V
+    where
+        'arena: 'out,
+        'tok: 'out,
+    {
+        &mut self.borrow_mut(token).data
+    }
+
+    pub fn iter_outgoing<'tok>(
+        self,
+        token: &'tok impl ReflAsRef<GhostToken<'brand>>,
+    ) -> OutgoingIterator<'tok, 'brand, 'arena, V> {
+        // FIXME: maybe enforce at least one item by using .outgoing()
+        // there should be no "standalone" vertices (?)
+        OutgoingIterator::new(self.maybe_outgoing(token), token)
+    }
+}
+
+impl<'tok, 'brand, 'arena, V: Debug> lens!(Vertex) {
+    pub fn data(&self) -> &V {
+        self.item.data(self)
+    }
+
+    pub fn iter_outgoing(self) -> OutgoingIterator<'tok, 'brand, 'arena, V> {
+        self.item.iter_outgoing(self.token)
+    }
+
+    fn debug_data(self, f: &mut Formatter) -> fmt::Result {
+        self.data().fmt(f)
+    }
+}
+
+// TODO: target
+entity!(half_edge: HalfEdge,
+    _init: ();
+    pub origin: Vertex,
+    pub twin: HalfEdge,
+    pub loop_: Loop,
+    pub edge: Edge
+);
+
+impl<'brand, 'arena, V> ptr!(HalfEdge) {
+    pub fn target(self, token: &impl ReflAsRef<GhostToken<'brand>>) -> ptr!(Vertex) {
+        self.twin(token).origin(token)
+    }
+}
+
+impl<'tok, 'brand, 'arena, V> lens!(HalfEdge) {
+    pub fn target(self) -> lens!(Vertex) {
+        self.item.target(&self).lens(self.token)
+    }
+}
+
+entity!(loop_: Loop,
+    _init: ();
+    half_edges[half_edge: half_edge back]: HalfEdge,
+    pub face: Face
+);
+
+entity!(edge: Edge,
+    _init: (),
+    half_edges: Option<[own!(HalfEdge); 2]> = None
+);
+
+impl<'brand, 'arena, V> ptr!(Edge) {
+    pub fn half_edges(self, token: &impl ReflAsRef<GhostToken<'brand>>) -> [ptr!(HalfEdge); 2] {
+        let he = self.borrow(token).half_edges.as_ref().unwrap();
+        [*he[0], *he[1]]
+    }
+
+    pub fn vertices(self, token: &impl ReflAsRef<GhostToken<'brand>>) -> [ptr!(Vertex); 2] {
+        self.half_edges(token).map(|x| x.origin(token))
+    }
+}
+
+impl<'tok, 'brand, 'arena, V> lens!(Edge) {
+    pub fn half_edges(self) -> [lens!(HalfEdge); 2] {
+        self.item.half_edges(self.token).map(|x| x.lens(self.token))
+    }
+
+    pub fn vertices(self) -> [lens!(Vertex); 2] {
+        self.item.vertices(self.token).map(|x| x.lens(self.token))
+    }
+
+    fn debug_half_edges(self, f: &mut Formatter) -> fmt::Result {
+        short_debug_list(self.half_edges().into_iter(), f)
+    }
+}
+
+entity!(face: Face,
+    _init: ();
+    outer_loops[outer_loop: loop_ back]: Loop,
+    inner_loops[inner_loop: loop_ back]: Loop,
+    pub shell: Shell
+);
+
+entity!(shell: Shell,
+    _init: ();
+    faces[face: face back]: Face,
+    edges[edge: edge]: Edge,
+    vertices[vertex: vertex]: Vertex,
+    pub body: Body
+);
+
+entity!(body: Body,
+    _init: ();
+    shells[shell: shell back]: Shell
+);
 
 struct Allocator<'brand, 'arena, T: Entity<'brand, 'arena>> {
     next_id: usize,
@@ -615,120 +787,6 @@ impl<'brand, 'arena, T: Entity<'brand, 'arena>> Allocator<'brand, 'arena, T> {
         self.freelist.push(ptr);
     }
 }
-
-entity!(vertex: Vertex,
-    init: V,
-    data: V = init;
-    outgoing: HalfEdge
-);
-
-impl<'brand, 'arena, V: Debug> ptr!(Vertex) {
-    pub fn data<'tok, 'out>(self, token: &'tok impl ReflAsRef<GhostToken<'brand>>) -> &'out V
-    where
-        'arena: 'out,
-        'tok: 'out,
-    {
-        &self.borrow(token).data
-    }
-
-    pub fn mut_data<'tok, 'out>(
-        self,
-        token: &'tok mut impl ReflAsMut<GhostToken<'brand>>,
-    ) -> &'out mut V
-    where
-        'arena: 'out,
-        'tok: 'out,
-    {
-        &mut self.borrow_mut(token).data
-    }
-}
-
-impl<'tok, 'brand, 'arena, V: Debug> lens!(Vertex) {
-    pub fn data(&self) -> &V {
-        self.item.data(self)
-    }
-
-    fn debug_data(self, f: &mut Formatter) -> fmt::Result {
-        self.data().fmt(f)
-    }
-}
-
-// TODO: target
-entity!(half_edge: HalfEdge,
-    init: ();
-    pub origin: Vertex,
-    pub twin: HalfEdge,
-    pub loop_: Loop,
-    pub edge: Edge
-);
-
-impl<'brand, 'arena, V> ptr!(HalfEdge) {
-    pub fn target(self, token: &impl ReflAsRef<GhostToken<'brand>>) -> ptr!(Vertex) {
-        self.twin(token).origin(token)
-    }
-}
-
-impl<'tok, 'brand, 'arena, V> lens!(HalfEdge) {
-    pub fn target(self) -> lens!(Vertex) {
-        self.item.target(&self).lens(self.token)
-    }
-}
-
-entity!(loop_: Loop,
-    init: ();
-    half_edges[half_edge: half_edge back]: HalfEdge,
-    pub face: Face
-);
-
-entity!(edge: Edge,
-    init: (),
-    half_edges: Option<[own!(HalfEdge); 2]> = None
-);
-
-impl<'brand, 'arena, V> ptr!(Edge) {
-    pub fn half_edges(self, token: &impl ReflAsRef<GhostToken<'brand>>) -> [ptr!(HalfEdge); 2] {
-        let he = self.borrow(token).half_edges.as_ref().unwrap();
-        [*he[0], *he[1]]
-    }
-
-    pub fn vertices(self, token: &impl ReflAsRef<GhostToken<'brand>>) -> [ptr!(Vertex); 2] {
-        self.half_edges(token).map(|x| x.origin(token))
-    }
-}
-
-impl<'tok, 'brand, 'arena, V> lens!(Edge) {
-    pub fn half_edges(self) -> [lens!(HalfEdge); 2] {
-        self.item.half_edges(self.token).map(|x| x.lens(self.token))
-    }
-
-    pub fn vertices(self) -> [lens!(Vertex); 2] {
-        self.item.vertices(self.token).map(|x| x.lens(self.token))
-    }
-
-    fn debug_half_edges(self, f: &mut Formatter) -> fmt::Result {
-        short_debug_list(self.half_edges().into_iter(), f)
-    }
-}
-
-entity!(face: Face,
-    init: ();
-    outer_loops[outer_loop: loop_ back]: Loop,
-    inner_loops[inner_loop: loop_ back]: Loop,
-    pub shell: Shell
-);
-
-entity!(shell: Shell,
-    init: ();
-    faces[face: face back]: Face,
-    edges[edge: edge]: Edge,
-    vertices[vertex: vertex]: Vertex,
-    pub body: Body
-);
-
-entity!(body: Body,
-    init: ();
-    shells[shell: shell back]: Shell
-);
 
 pub struct Mevvlfs<'brand, 'arena, V> {
     pub edge: own!(Edge),
