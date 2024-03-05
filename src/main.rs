@@ -3,7 +3,11 @@
 use core::ops::Deref;
 pub use ghost_cell::{GhostBorrow, GhostCell, GhostToken};
 use paste::paste;
-use std::fmt::{self, Debug, Formatter};
+use std::{
+    fmt::{self, Debug, Display, Formatter},
+    hash::{Hash, Hasher},
+};
+use thiserror::Error;
 pub use typed_arena::Arena;
 
 pub trait ReflAsRef<T> {
@@ -26,8 +30,13 @@ impl<T> ReflAsMut<T> for T {
     }
 }
 
-struct DebugFn<F: Fn(&mut Formatter) -> fmt::Result>(F);
-impl<F: Fn(&mut Formatter) -> fmt::Result> Debug for DebugFn<F> {
+struct DisplayFn<F: Fn(&mut Formatter) -> fmt::Result>(F);
+impl<F: Fn(&mut Formatter) -> fmt::Result> Display for DisplayFn<F> {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+        self.0(f)
+    }
+}
+impl<F: Fn(&mut Formatter) -> fmt::Result> Debug for DisplayFn<F> {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         self.0(f)
     }
@@ -95,7 +104,7 @@ fn short_debug<'tok, 'brand, 'arena, T: Entity<'brand, 'arena>>(
 
 fn short_debug_fn<'tok, 'brand, 'arena, T: Entity<'brand, 'arena>>(x: lens_t!(T)) -> impl Debug {
     let id = x.id();
-    DebugFn(move |f| _short_debug(T::type_name(), id, f))
+    DisplayFn(move |f| _short_debug(T::type_name(), id, f))
 }
 
 fn short_debug_list<'tok, 'brand, 'arena, T, I>(iter: I, f: &mut Formatter) -> fmt::Result
@@ -105,6 +114,14 @@ where
     I: Iterator<Item = lens_t!(T)>,
 {
     f.debug_list().entries(iter.map(short_debug_fn)).finish()
+}
+
+fn or_err<T>(cond: bool, err: T) -> Result<(), T> {
+    if cond {
+        Ok(())
+    } else {
+        Err(err)
+    }
 }
 
 pub struct Ptr<'brand, 'arena, T>(pub &'arena GhostCell<'brand, T>);
@@ -333,9 +350,6 @@ impl<'tok, 'brand, 'arena, T: Entity<'brand, 'arena>> DoubleEndedIterator
 
 // trait for a kind of topological element (i.e. Vertex, HalfEdge, Face)
 trait Entity<'brand, 'arena>: Eq + Sized {
-    type Init;
-
-    fn new(id: usize, init: Self::Init) -> Self;
     fn clear(&mut self);
 
     fn type_name() -> &'static str;
@@ -404,12 +418,11 @@ trait Entity<'brand, 'arena>: Eq + Sized {
 }
 
 macro_rules! entity {
-	($name:ident : $T:ident,
-		$arg_name:ident: $arg_ty:ty
-		$(, $($init_field:ident : $init_ty:ty = $init_expr:expr),* )?
+	($name:ident : $T:ident $(($init_name:ident : $init_ty:ty))?
+		$(, $($custom_field:ident : $custom_ty:ty = $custom_expr:expr),* )?
 		$(;
 			$( $field_vis:vis $field:ident
-				$([ $list_singular:ident : $list_name:ident  $($list_back:ident)? ])?
+				$([ $list_singular:ident : $list_name:ident $(($list_init:ty))? $($list_back:ident)? ])?
 			 : $field_ty:ident ),*
 		)?
 	) => { paste! {
@@ -417,23 +430,24 @@ macro_rules! entity {
 			id: Option<usize>,
 			next: Option<ptr!($T)>,
 			prev: Option<ptr!($T)>,
-			$($($init_field: $init_ty,)*)?
+			$($($custom_field: $custom_ty,)*)?
 			$($($field: Option<ptr!($field_ty)>,)*)?
 		}
 
-		impl<'brand, 'arena, V> Entity<'brand, 'arena> for $T<'brand, 'arena, V> {
-			type Init = $arg_ty;
-
-			fn new(id: usize, $arg_name: $arg_ty) -> Self {
-				Self {
-					id: Some(id),
+		impl<'brand, 'arena, V> $T<'brand, 'arena, V> {
+			fn new($($init_name: $init_ty,)? dcel: &mut Dcel<'brand, 'arena, V>) -> own_t!(Self) {
+				let id = Some(dcel.$name.next_id());
+				dcel.$name.alloc(Self {
+					id,
 					prev: None,
 					next: None,
-					$($($init_field: $init_expr,)*)?
+					$($($custom_field: $custom_expr,)*)?
 					$($($field: None,)*)?
-				}
+				}, &mut dcel.token)
 			}
+		}
 
+		impl<'brand, 'arena, V> Entity<'brand, 'arena> for $T<'brand, 'arena, V> {
 			fn clear(&mut self) {
 				self.id = None;
 				#[cfg(debug_assertions)]
@@ -480,11 +494,11 @@ macro_rules! entity {
 					self.borrow(token).$field
 				}
 
-				fn [<set_ $field>](self, token: &mut impl ReflAsMut<GhostToken<'brand>>, x: ptr!($field_ty)) {
-					self.[<set_opt_ $field>](token, Some(x));
+				fn [<set_ $field>](self, x: ptr!($field_ty), token: &mut impl ReflAsMut<GhostToken<'brand>>) {
+					self.[<set_opt_ $field>](Some(x), token);
 				}
 
-				fn [<set_opt_ $field>](self, token: &mut impl ReflAsMut<GhostToken<'brand>>, x: Option<ptr!($field_ty)>) {
+				fn [<set_opt_ $field>](self, x: Option<ptr!($field_ty)>, token: &mut impl ReflAsMut<GhostToken<'brand>>,) {
 					self.borrow_mut(token).$field = x;
 				}
 
@@ -497,27 +511,44 @@ macro_rules! entity {
 						EntityIterator::new(self.[<maybe_ $field>](token), token)
 					}
 
+					pub fn [<iter_mut_ $field>]<T: ReflAsMut<GhostToken<'brand>>>(
+						self,
+						token: &mut T,
+						mut f: impl FnMut(ptr!($field_ty), &mut T),
+					) {
+						let Some(mut item) = self.[<maybe_ $field>](token) else {
+							return;
+						};
+
+						let last = item.prev(token);
+						while {
+							f(item, token);
+							item = item.next(token);
+							!item.eq(last, token)
+						} {}
+					}
+
 					fn [<add_ $list_singular>](
 						self,
-						token: &mut impl ReflAsMut<GhostToken<'brand>>,
 						x: ptr!($field_ty),
+						token: &mut impl ReflAsMut<GhostToken<'brand>>,
 					) {
 						let list = Entity::list_add(x, self.[<maybe_ $field>](token), token);
-						self.[<set_ $field>](token, list);
+						self.[<set_ $field>](list, token);
 
 						$(
 							let [<_ $list_back>] = ();
-							x.[<set_ $name>](token, self);
+							x.[<set_ $name>](self, token);
 						)?
 					}
 
 					fn [<add_new_ $list_singular>](
 						self,
+						$(init: $list_init,)?
 						dcel: &mut Dcel<'brand, 'arena, V>,
-						init: <$field_ty<'brand, 'arena, V> as Entity<'brand, 'arena>>::Init,
 					) -> own!($field_ty) {
-						let x = dcel.$list_name.alloc(&mut dcel.token, init);
-						self.[<add_ $list_singular>](dcel, *x);
+						let x = $field_ty::new($(init as $list_init,)? dcel);
+						self.[<add_ $list_singular>](*x, dcel);
 						x
 					}
 				)?
@@ -542,11 +573,14 @@ macro_rules! entity {
 					}
 				)?
 
-				fn [<debug_ $field>](self, f: &mut Formatter) -> fmt::Result {
+				fn [<debug_ $field>](self, f: &mut Formatter) -> fmt::Result
+				where V: Debug
+				{
 					$({
 						let [<_ $list_singular>] = ();
 						if true {
-							return short_debug_list(self.[<iter_ $field>](), f);
+							// return short_debug_list(self.[<iter_ $field>](), f);
+							return f.debug_list().entries(self.[<iter_ $field>]()).finish();
 						}
 					})?
 					short_debug(self.$field(), f)
@@ -561,10 +595,10 @@ macro_rules! entity {
 					.field("prev", &short_debug_fn(self.prev()))
 					.field("next", &short_debug_fn(self.next()))
 					$($(
-						.field(stringify!($field), &DebugFn(|f| self.[<debug_ $field>](f)))
+						.field(stringify!($field), &DisplayFn(|f| self.[<debug_ $field>](f)))
 					)*)?
 					$($(
-						.field(stringify!($init_field), &DebugFn(|f| self.[<debug_ $init_field>](f)))
+						.field(stringify!($custom_field), &DisplayFn(|f| self.[<debug_ $custom_field>](f)))
 					)*)?
 					.finish()
 			}
@@ -577,6 +611,12 @@ macro_rules! entity {
 			}
 		}
 
+		impl<'brand, 'arena, V> Hash for $T<'brand, 'arena, V> {
+			fn hash<H: Hasher>(&self, state: &mut H) {
+				self.id.hash(state);
+			}
+		}
+
 		impl<'brand, 'arena, V> PartialEq for $T<'brand, 'arena, V> {
 			fn eq(&self, other: &Self) -> bool {
 				self.id() == other.id()
@@ -586,8 +626,7 @@ macro_rules! entity {
 	}};
 }
 
-entity!(vertex: Vertex,
-    init: V,
+entity!(vertex: Vertex (init: V),
     data: V = init;
     outgoing: HalfEdge
 );
@@ -627,7 +666,7 @@ impl<'tok, 'brand, 'arena, V> Iterator for OutgoingIterator<'tok, 'brand, 'arena
     }
 }
 
-impl<'brand, 'arena, V> ptr!(Vertex) {
+impl<'brand, 'arena, V: Debug> ptr!(Vertex) {
     pub fn data<'tok, 'out>(self, token: &'tok impl ReflAsRef<GhostToken<'brand>>) -> &'out V
     where
         'arena: 'out,
@@ -655,6 +694,14 @@ impl<'brand, 'arena, V> ptr!(Vertex) {
         // there should be no "standalone" vertices (?)
         OutgoingIterator::new(self.maybe_outgoing(token), token)
     }
+
+    pub fn find_outgoing(
+        self,
+        loop_: ptr!(Loop),
+        token: &impl ReflAsRef<GhostToken<'brand>>,
+    ) -> Option<ptr!(HalfEdge)> {
+        self.lens(token).find_outgoing(loop_).map(|x| x.item)
+    }
 }
 
 impl<'tok, 'brand, 'arena, V: Debug> lens!(Vertex) {
@@ -666,14 +713,17 @@ impl<'tok, 'brand, 'arena, V: Debug> lens!(Vertex) {
         self.item.iter_outgoing(self.token)
     }
 
+    pub fn find_outgoing(self, loop_: ptr!(Loop)) -> Option<lens!(HalfEdge)> {
+        self.iter_outgoing().find(|x| x.loop_().eq(loop_))
+    }
+
     fn debug_data(self, f: &mut Formatter) -> fmt::Result {
         self.data().fmt(f)
     }
 }
 
 // TODO: target
-entity!(half_edge: HalfEdge,
-    _init: ();
+entity!(half_edge: HalfEdge;
     pub origin: Vertex,
     pub twin: HalfEdge,
     pub loop_: Loop,
@@ -692,14 +742,12 @@ impl<'tok, 'brand, 'arena, V> lens!(HalfEdge) {
     }
 }
 
-entity!(loop_: Loop,
-    _init: ();
+entity!(loop_: Loop;
     half_edges[half_edge: half_edge back]: HalfEdge,
     pub face: Face
 );
 
 entity!(edge: Edge,
-    _init: (),
     half_edges: Option<[own!(HalfEdge); 2]> = None
 );
 
@@ -712,6 +760,21 @@ impl<'brand, 'arena, V> ptr!(Edge) {
     pub fn vertices(self, token: &impl ReflAsRef<GhostToken<'brand>>) -> [ptr!(Vertex); 2] {
         self.half_edges(token).map(|x| x.origin(token))
     }
+
+    fn set_half_edges(
+        self,
+        x: [own!(HalfEdge); 2],
+        token: &mut impl ReflAsMut<GhostToken<'brand>>,
+    ) {
+        self.borrow_mut(token).half_edges = Some(x);
+    }
+
+    fn take_half_edges(
+        self,
+        token: &mut impl ReflAsMut<GhostToken<'brand>>,
+    ) -> [own!(HalfEdge); 2] {
+        self.borrow_mut(token).half_edges.take().unwrap()
+    }
 }
 
 impl<'tok, 'brand, 'arena, V> lens!(Edge) {
@@ -723,28 +786,28 @@ impl<'tok, 'brand, 'arena, V> lens!(Edge) {
         self.item.vertices(self.token).map(|x| x.lens(self.token))
     }
 
-    fn debug_half_edges(self, f: &mut Formatter) -> fmt::Result {
-        short_debug_list(self.half_edges().into_iter(), f)
+    fn debug_half_edges(self, f: &mut Formatter) -> fmt::Result
+    where
+        V: Debug,
+    {
+        f.debug_list().entries(self.half_edges()).finish()
     }
 }
 
-entity!(face: Face,
-    _init: ();
+entity!(face: Face;
     outer_loops[outer_loop: loop_ back]: Loop,
     inner_loops[inner_loop: loop_ back]: Loop,
     pub shell: Shell
 );
 
-entity!(shell: Shell,
-    _init: ();
+entity!(shell: Shell;
     faces[face: face back]: Face,
     edges[edge: edge]: Edge,
-    vertices[vertex: vertex]: Vertex,
+    vertices[vertex: vertex (V)]: Vertex,
     pub body: Body
 );
 
-entity!(body: Body,
-    _init: ();
+entity!(body: Body;
     shells[shell: shell back]: Shell
 );
 
@@ -763,21 +826,18 @@ impl<'brand, 'arena, T: Entity<'brand, 'arena>> Allocator<'brand, 'arena, T> {
         }
     }
 
-    fn alloc(
-        &mut self,
-        token: &mut impl ReflAsMut<GhostToken<'brand>>,
-        init: T::Init,
-    ) -> own_t!(T) {
+    fn next_id(&mut self) -> usize {
         let id = self.next_id;
         self.next_id += 1;
+        id
+    }
 
-        let t = Entity::new(id, init);
-
+    fn alloc(&mut self, x: T, token: &mut impl ReflAsMut<GhostToken<'brand>>) -> own_t!(T) {
         if let Some(ptr) = self.freelist.pop() {
-            *ptr.borrow_mut(token) = t;
+            *ptr.borrow_mut(token) = x;
             ptr
         } else {
-            Own::unsafe_make_owned(Ptr(GhostCell::from_mut(self.arena.alloc(t))))
+            Own::unsafe_make_owned(Ptr(GhostCell::from_mut(self.arena.alloc(x))))
         }
     }
 
@@ -789,6 +849,7 @@ impl<'brand, 'arena, T: Entity<'brand, 'arena>> Allocator<'brand, 'arena, T> {
 }
 
 pub struct Mevvlfs<'brand, 'arena, V> {
+    pub body: ptr!(Body),
     pub edge: own!(Edge),
     pub vertices: [own!(Vertex); 2],
     pub loop_: own!(Loop),
@@ -796,17 +857,72 @@ pub struct Mevvlfs<'brand, 'arena, V> {
     pub shell: own!(Shell),
 }
 
+pub struct Melf<'brand, 'arena, V> {
+    pub shell: ptr!(Shell),
+    pub vertices: [ptr!(Vertex); 2],
+    pub old_loop: ptr!(Loop),
+    pub new_loop: own!(Loop),
+    pub edge: own!(Edge),
+    pub face: own!(Face),
+}
+
+pub struct Mev<'brand, 'arena, V> {
+    pub shell: ptr!(Shell),
+    pub loop_: ptr!(Loop),
+    pub old_vertex: ptr!(Vertex),
+    pub new_vertex: own!(Vertex),
+    pub edge: own!(Edge),
+}
+
+pub struct Mve<'brand, 'arena, V> {
+    pub shell: ptr!(Shell),
+    pub old_edge: ptr!(Edge),
+    pub new_edge: own!(Edge),
+    pub vertex: own!(Vertex),
+}
+
 pub enum EulerOp<'brand, 'arena, V> {
     Mevvlfs(Mevvlfs<'brand, 'arena, V>),
+    Melf(Melf<'brand, 'arena, V>),
+    Mev(Mev<'brand, 'arena, V>),
+    Mve(Mve<'brand, 'arena, V>),
 }
 
-impl<'brand, 'arena, V> From<Mevvlfs<'brand, 'arena, V>> for EulerOp<'brand, 'arena, V> {
-    fn from(op: Mevvlfs<'brand, 'arena, V>) -> Self {
-        Self::Mevvlfs(op)
-    }
+macro_rules! euler_op {
+    ($x:ident) => {
+        impl<'brand, 'arena, V> From<$x<'brand, 'arena, V>> for EulerOp<'brand, 'arena, V> {
+            fn from(op: $x<'brand, 'arena, V>) -> Self {
+                Self::$x(op)
+            }
+        }
+    };
 }
 
-#[derive(Default)]
+euler_op!(Mevvlfs);
+euler_op!(Melf);
+euler_op!(Mev);
+euler_op!(Mve);
+
+#[derive(Debug, Error)]
+pub enum KevvlfsError {
+    #[error("edge vertices do not equal vertices")]
+    EdgeVerticesMismatch,
+    #[error("half_edge loop does not equal loop")]
+    HalfEdgeLoopMismatch,
+    #[error("loop is not cycle between half edges")]
+    InvalidLoop,
+    #[error("face outer loop does not match loop")]
+    FaceOuterLoopMismatch,
+    #[error("face has inner loops")]
+    FaceHasInnerLoops,
+    #[error("shell has more than one face")]
+    ShellHasMoreThanOneFace,
+    #[error("shell face does not match face")]
+    ShellFaceMismatch,
+    #[error("shell body does not match body")]
+    ShellBodyMismatch,
+}
+
 pub struct DcelArena<'brand, 'arena, V> {
     pub vertex: Arena<Vertex<'brand, 'arena, V>>,
     pub half_edge: Arena<HalfEdge<'brand, 'arena, V>>,
@@ -815,6 +931,20 @@ pub struct DcelArena<'brand, 'arena, V> {
     pub face: Arena<Face<'brand, 'arena, V>>,
     pub shell: Arena<Shell<'brand, 'arena, V>>,
     pub body: Arena<Body<'brand, 'arena, V>>,
+}
+
+impl<'brand, 'arena, V> Default for DcelArena<'brand, 'arena, V> {
+    fn default() -> Self {
+        Self {
+            vertex: Default::default(),
+            half_edge: Default::default(),
+            loop_: Default::default(),
+            edge: Default::default(),
+            face: Default::default(),
+            shell: Default::default(),
+            body: Default::default(),
+        }
+    }
 }
 
 pub struct Dcel<'brand, 'arena, V> {
@@ -841,21 +971,8 @@ impl<'brand, 'arena, V> ReflAsMut<GhostToken<'brand>> for Dcel<'brand, 'arena, V
     }
 }
 
-/*
-impl<'brand, 'arena, V> std::convert::AsMut<GhostToken<'brand>> for Dcel<'brand, 'arena, V> {
-    fn as_mut(&mut self) -> &mut GhostToken<'brand> {
-        &mut self.token
-    }
-}
-
-impl<'brand, 'arena, V> core::borrow::Borrow<GhostToken<'brand>> for Dcel<'brand, 'arena, V> {
-    fn borrow(&self) -> &GhostToken<'brand> {
-        &self.token
-    }
-}*/
-
 impl<'brand, 'arena, V: Debug> Dcel<'brand, 'arena, V> {
-    fn new(token: GhostToken<'brand>, ar: &'arena DcelArena<'brand, 'arena, V>) -> Self {
+    pub fn from_token(token: GhostToken<'brand>, ar: &'arena DcelArena<'brand, 'arena, V>) -> Self {
         Self {
             token,
             bodies: None,
@@ -869,97 +986,93 @@ impl<'brand, 'arena, V: Debug> Dcel<'brand, 'arena, V> {
         }
     }
 
+    pub fn new<R, F, W: Debug>(fun: F) -> R
+    where
+        for<'new_brand, 'new_arena> F: FnOnce(Dcel<'new_brand, 'new_arena, W>) -> R,
+    {
+        GhostToken::new(|token| {
+            let arena = DcelArena::default();
+            let dcel = Dcel::from_token(token, &arena);
+
+            fun(dcel)
+        })
+    }
+
     pub fn new_body(&mut self) -> own!(Body) {
-        let body = self.body.alloc(&mut self.token, ());
+        let body = Body::new(self);
         self.bodies = Some(Entity::list_add(*body, self.bodies, self));
         body
     }
 
-    fn new_edge(&mut self, shell: ptr!(Shell)) -> (own!(Edge), [ptr!(HalfEdge); 2]) {
-        let edge = shell.add_new_edge(self, ());
+    pub fn delete_body(&mut self, body: own!(Body)) {
+        self.bodies = Entity::list_remove(*body, self);
+        body.free(self);
+    }
 
-        let he1_own = self.half_edge.alloc(&mut self.token, ());
-        let he2_own = self.half_edge.alloc(&mut self.token, ());
+    pub fn iter_bodies<'tok>(
+        &'tok self,
+    ) -> EntityIterator<'tok, 'brand, 'arena, Body<'brand, 'arena, V>> {
+        EntityIterator::new(self.bodies, self)
+    }
+
+    fn new_edge(&mut self, shell: ptr!(Shell)) -> (own!(Edge), [ptr!(HalfEdge); 2]) {
+        let edge = shell.add_new_edge(self);
+
+        let he1_own = HalfEdge::new(self);
+        let he2_own = HalfEdge::new(self);
 
         let he1 = *he1_own;
         let he2 = *he2_own;
 
-        edge.borrow_mut(&mut self.token).half_edges = Some([he1_own, he2_own]);
+        edge.set_half_edges([he1_own, he2_own], self);
 
-        he1.set_twin(self, he2);
-        he2.set_twin(self, he1);
-        he1.set_edge(self, *edge);
-        he2.set_edge(self, *edge);
+        he1.set_twin(he2, self);
+        he2.set_twin(he1, self);
+        he1.set_edge(*edge, self);
+        he2.set_edge(*edge, self);
 
         (edge, [he1, he2])
     }
 
     #[inline(always)]
     fn origin(&mut self, v: ptr!(Vertex), h: ptr!(HalfEdge)) {
-        v.borrow_mut(&mut self.token).outgoing = Some(h);
-        h.borrow_mut(&mut self.token).origin = Some(v);
+        v.set_outgoing(h, self);
+        h.set_origin(v, self)
     }
 
     #[inline(always)]
     fn follow(&mut self, prev: ptr!(HalfEdge), next: ptr!(HalfEdge)) {
-        next.borrow_mut(&mut self.token).prev = Some(prev);
-        prev.borrow_mut(&mut self.token).next = Some(next);
+        next.set_prev(prev, self);
+        prev.set_next(next, self);
     }
 
     pub fn undo(&mut self, op: impl Into<EulerOp<'brand, 'arena, V>>) {
         match op.into() {
             EulerOp::Mevvlfs(x) => self.kevvlfs(x),
+            _ => todo!(),
         }
     }
-    /*
-    pub fn equals<'a, 'b, 'slf: 'a + 'b, T: Entity<'brand, 'arena> + 'arena>(
-        &'slf self,
-        a: impl GhostBorrow<'a, 'brand, Result = &'arena T>,
-        b: impl GhostBorrow<'b, 'brand, Result = &'arena T>,
-    ) -> bool {
-        a.borrow(&self.token) == b.borrow(&self.token)
-    }
-    */
 
-    pub fn iter_outgoing<T>(
-        &mut self,
-        vertex: ptr!(Vertex),
-        mut f: impl FnMut(&mut GhostToken<'brand>, ptr!(HalfEdge)) -> Option<T>,
-    ) -> Option<T> {
-        let mut he = vertex.outgoing(&self.token);
-        let orig = he;
-
-        while {
-            if let Some(x) = f(&mut self.token, he) {
-                return Some(x);
-            }
-
-            he = he.twin(self).next(self);
-            // debug_assert!(he.origin())
-
-            !orig.eq(he, self)
-        } {}
-
-        None
-    }
+    // Make Edge-Vertex-Vertex-Loop-Face-Shell
 
     pub fn mevvlfs(&mut self, body: ptr!(Body), data: [V; 2]) -> Mevvlfs<'brand, 'arena, V> {
         let [d1, d2] = data;
 
-        let shell = body.add_new_shell(self, ());
-        let face = shell.add_new_face(self, ());
+        let shell = body.add_new_shell(self);
+        let face = shell.add_new_face(self);
         let (edge, [a, b]) = self.new_edge(*shell);
-        let loop_ = face.add_new_outer_loop(self, ());
-        let v1 = shell.add_new_vertex(self, d1);
-        let v2 = shell.add_new_vertex(self, d2);
+        let loop_ = face.add_new_outer_loop(self);
+        let v1 = shell.add_new_vertex(d1, self);
+        let v2 = shell.add_new_vertex(d2, self);
 
         self.origin(*v1, a);
         self.origin(*v2, b);
 
-        loop_.add_half_edge(self, a);
-        loop_.add_half_edge(self, b);
+        loop_.add_half_edge(a, self);
+        loop_.add_half_edge(b, self);
 
         Mevvlfs {
+            body,
             edge,
             vertices: [v1, v2],
             loop_,
@@ -968,8 +1081,9 @@ impl<'brand, 'arena, V: Debug> Dcel<'brand, 'arena, V> {
         }
     }
 
-    pub fn kevvlfs(&mut self, op: Mevvlfs<'brand, 'arena, V>) {
+    pub fn check_kevvlfs(&self, op: &Mevvlfs<'brand, 'arena, V>) -> Result<(), KevvlfsError> {
         let Mevvlfs {
+            body,
             edge,
             vertices: [v1, v2],
             loop_,
@@ -977,26 +1091,56 @@ impl<'brand, 'arena, V: Debug> Dcel<'brand, 'arena, V> {
             shell,
         } = op;
 
-        let [a, b] = edge.borrow_mut(&mut self.token).half_edges.take().unwrap();
+        mklens!(self, edge, loop_, face, shell, body, v1, v2);
 
-        {
-            mklens!(self, a, b, loop_, face, shell, v1, v2);
+        let [a, b] = edge.half_edges();
+        let edge_verts = edge.vertices();
 
-            assert!([a.origin(), b.origin()] == [v1, v2] || [a.origin(), b.origin()] == [v2, v1]);
+        or_err(
+            edge_verts == [v1, v2] || edge_verts == [v2, v1],
+            KevvlfsError::EdgeVerticesMismatch,
+        )?;
 
-            assert_eq!(a.next(), b);
-            assert_eq!(b.next(), a);
-            assert_eq!(a.loop_(), loop_);
+        or_err(a.loop_() == loop_, KevvlfsError::HalfEdgeLoopMismatch)?;
+        or_err(a.next() == b, KevvlfsError::InvalidLoop)?;
+        or_err(b.next() == a, KevvlfsError::InvalidLoop)?;
 
-            assert_eq!(face.outer_loops(), loop_);
-            assert!(face.maybe_inner_loops().is_none());
+        or_err(
+            face.outer_loops() == loop_,
+            KevvlfsError::FaceOuterLoopMismatch,
+        )?;
+        or_err(
+            face.maybe_inner_loops().is_none(),
+            KevvlfsError::FaceHasInnerLoops,
+        )?;
 
-            assert_eq!(face.next(), face);
-            assert_eq!(shell.faces(), face);
+        or_err(face.next() == face, KevvlfsError::ShellHasMoreThanOneFace)?;
+        or_err(shell.faces() == face, KevvlfsError::ShellFaceMismatch)?;
+        or_err(shell.body() == body, KevvlfsError::ShellBodyMismatch)?;
+
+        Ok(())
+    }
+
+    pub fn try_kevvlfs(
+        &mut self,
+        op: Mevvlfs<'brand, 'arena, V>,
+    ) -> Result<(), (Mevvlfs<'brand, 'arena, V>, KevvlfsError)> {
+        if let Err(err) = self.check_kevvlfs(&op) {
+            return Err((op, err));
         }
 
+        let Mevvlfs {
+            body,
+            edge,
+            vertices: [v1, v2],
+            loop_,
+            face,
+            shell,
+        } = op;
+
+        let [a, b] = edge.take_half_edges(self);
         let shells = Entity::list_remove(*shell, self);
-        shell.body(self).set_opt_shells(self, shells);
+        body.set_opt_shells(shells, self);
 
         edge.free(self);
         a.free(self);
@@ -1006,15 +1150,117 @@ impl<'brand, 'arena, V: Debug> Dcel<'brand, 'arena, V> {
         shell.free(self);
         v1.free(self);
         v2.free(self);
+
+        Ok(())
     }
 
-    /*
+    pub fn kevvlfs(&mut self, op: Mevvlfs<'brand, 'arena, V>) {
+        self.try_kevvlfs(op).map_err(|(_, e)| e).unwrap()
+    }
+
+    pub fn mev(
+        &mut self,
+        shell: ptr!(Shell),
+        loop_: ptr!(Loop),
+        old_vertex: ptr!(Vertex),
+        data: V,
+    ) -> Mev<'brand, 'arena, V> {
+        //
+        //      o
+        //  a /   \ d
+        //   <     <
+        //
+
+        //    < n <
+        //  b |   | c
+        //      o
+        //  a /   \ d
+        //   <     <
+
+        let (edge, [b, c]) = self.new_edge(shell);
+        let new_vertex = shell.add_new_vertex(data, self);
+
+        let a = old_vertex.find_outgoing(loop_, self).unwrap();
+        let d = a.prev(self);
+
+        self.follow(d, c);
+        self.follow(c, b);
+        self.follow(b, a);
+
+        b.set_loop_(loop_, self);
+        c.set_loop_(loop_, self);
+
+        self.origin(*new_vertex, b);
+        self.origin(old_vertex, c);
+
+        Mev {
+            shell,
+            loop_,
+            old_vertex,
+            new_vertex,
+            edge,
+        }
+    }
+
+    pub fn melf(
+        &mut self,
+        shell: ptr!(Shell),
+        vertices: [ptr!(Vertex); 2],
+        old_loop: ptr!(Loop),
+    ) -> Melf<'brand, 'arena, V> {
+        // before:
+        //     >               >
+        //   a0 \             / a2
+        //       v1         v2
+        //   b0 /             \ b2
+        //     <               <
+        //
+        // after:
+        //     >               >
+        //   a0 \    a1 ->    / a2
+        //       v1         v2
+        //   b0 /    <- b1    \ b2
+        //     <               <
+        //
+
+        let (edge, [a1, b1]) = self.new_edge(shell);
+        let face = shell.add_new_face(self);
+        let new_loop = face.add_new_outer_loop(self);
+
+        let [v1, v2] = vertices;
+        let [b0, a2] = vertices.map(|v| v.find_outgoing(old_loop, self).unwrap());
+
+        let a0 = b0.prev(self);
+        let b2 = a2.prev(self);
+
+        self.origin(v1, a1);
+        self.follow(a0, a1);
+        self.follow(a1, a2);
+        old_loop.set_half_edges(a1, self);
+        a1.set_loop_(old_loop, self);
+
+        self.origin(v2, b1);
+        self.follow(b2, b1);
+        self.follow(b1, b0);
+        new_loop.set_half_edges(b1, self);
+        new_loop.iter_mut_half_edges(self, |x, dcel| x.set_loop_(*new_loop, dcel));
+
+        Melf {
+            shell,
+            vertices,
+            old_loop,
+            new_loop,
+            edge,
+            face,
+        }
+    }
+
     pub fn mve(
         &mut self,
         shell: ptr!(Shell),
-        edge: ptr!(Edge),
+        old_edge: ptr!(Edge),
         data: V,
-    ) -> Option<(ptr!(Vertex), ptr!(Edge))> {
+    ) -> Mve<'brand, 'arena, V> {
         // before:
         //
         //                        >
@@ -1035,206 +1281,76 @@ impl<'brand, 'arena, V: Debug> Dcel<'brand, 'arena, V> {
         //                       \ b3
         //                        <
 
-        let v = self.vertices.alloc(&mut self.token, data);
-        let a2 = self.half_edges.alloc(&mut self.token, ());
-        let b2 = self.half_edges.alloc(&mut self.token, ());
+        let (new_edge, [a2, b2]) = self.new_edge(shell);
+        let v = shell.add_new_vertex(data, self);
 
-        let a1 = edge;
-        let v1 = a1.borrow(&self.token).origin?;
-        //let fa = a1.borrow(&self.token).face?;
+        let [a1, b1] = old_edge.half_edges(self);
+        let [v1, v2] = old_edge.vertices(self);
 
-        let b1 = a1.borrow(&self.token).twin?;
-        let v2 = b1.borrow(&self.token).origin?;
-        //let fb = b1.borrow(&self.token).face?;
+        let mut a3 = a1.next(self);
+        let mut b3 = b2.prev(self);
 
-        let mut a3 = a1.borrow(&self.token).next?;
-        if a3.borrow(&self.token) == b1.borrow(&self.token) {
-            a3 = b1; // a1
+        if a3.eq(b1, self) {
+            a3 = b2;
+        }
+        if b3.eq(a1, self) {
+            b3 = a2;
         }
 
-        let mut b3 = b1.borrow(&self.token).prev?;
-        if b3.borrow(&self.token) == a1.borrow(&self.token) {
-            b3 = a2; // b1
-        }
-
-        self.twin(a2, b2);
-
-        self.origin(v, a2);
-        self.origin(v, b1);
+        self.origin(*v, a2);
+        self.origin(*v, b1);
         self.origin(v2, b2);
 
         self.follow(a1, a2);
         self.follow(a2, a3);
-
         self.follow(b3, b2);
         self.follow(b2, b1);
 
-        Some((a2, v))
-    }*/
-
-    /*
-
-    pub fn mevvls(&mut self, data: [V; 2]) -> (ptr!(HalfEdge), [ptr!(Vertex); 2], ptr!(Face)) {
-        let [d1, d2] = data;
-
-        let l = self.faces.alloc(&mut self.token, ());
-        let v1 = self.vertices.alloc(&mut self.token, d1);
-        let v2 = self.vertices.alloc(&mut self.token, d2);
-        let a = self.half_edges.alloc(&mut self.token, ());
-        let b = self.half_edges.alloc(&mut self.token, ());
-
-        self.twin(a, b);
-        self.follow(a, b);
-        self.follow(b, a);
-        self.origin(v1, a);
-        self.origin(v2, b);
-
-        (a, [v1, v2], l)
-    }
-
-    #[inline(always)]
-    fn twin(&mut self, a: ptr!(HalfEdge), b: ptr!(HalfEdge)) {
-        a.borrow_mut(&mut self.token).twin = Some(b);
-        b.borrow_mut(&mut self.token).twin = Some(a);
-    }
-
-    pub fn mve(
-        &mut self,
-        edge: ptr!(HalfEdge),
-        data: V,
-    ) -> Option<(ptr!(HalfEdge), ptr!(Vertex))> {
-        // before:
-        //
-        //                        >
-        //                       / a3
-        //          a1 ->
-        // v1         v         v2
-        //          <- b1
-        //                       \ b3
-        //                        <
-        //
-        // after:
-        //
-        //                        >
-        //                       / a3
-        //     a1 ->     a2 ->
-        // v1         v         v2
-        //     <- b1     <- b2
-        //                       \ b3
-        //                        <
-
-        let v = self.vertices.alloc(&mut self.token, data);
-        let a2 = self.half_edges.alloc(&mut self.token, ());
-        let b2 = self.half_edges.alloc(&mut self.token, ());
-
-        let a1 = edge;
-        let v1 = a1.borrow(&self.token).origin?;
-        //let fa = a1.borrow(&self.token).face?;
-
-        let b1 = a1.borrow(&self.token).twin?;
-        let v2 = b1.borrow(&self.token).origin?;
-        //let fb = b1.borrow(&self.token).face?;
-
-        let mut a3 = a1.borrow(&self.token).next?;
-        if a3.borrow(&self.token) == b1.borrow(&self.token) {
-            a3 = b1; // a1
+        Mve {
+            shell,
+            old_edge,
+            new_edge,
+            vertex: v,
         }
-
-        let mut b3 = b1.borrow(&self.token).prev?;
-        if b3.borrow(&self.token) == a1.borrow(&self.token) {
-            b3 = a2; // b1
-        }
-
-        self.twin(a2, b2);
-
-        self.origin(v, a2);
-        self.origin(v, b1);
-        self.origin(v2, b2);
-
-        self.follow(a1, a2);
-        self.follow(a2, a3);
-
-        self.follow(b3, b2);
-        self.follow(b2, b1);
-
-        Some((a2, v))
     }
-
-    // pub fn mel(&mut self, b0: ptr!(HalfEdge), a2: ptr!(HalfEdge)) -> Option<()> {
-    pub fn mel(&mut self, v1: ptr!(Vertex), v2: ptr!(Vertex)) -> Option<()> {
-        // before:
-        //     >               >
-        //   a0 \             / a2
-        //       v1         v2
-        //   b0 /             \ b2
-        //     <               <
-        //
-        // after:
-        //     >               >
-        //   a0 \    a1 ->    / a2
-        //       v1         v2
-        //   b0 /    <- b1    \ b2
-        //     <               <
-        //
-
-        let a1 = self.half_edges.alloc(&mut self.token, ());
-        let b1 = self.half_edges.alloc(&mut self.token, ());
-
-        let b0 = v1.borrow(&self.token).outgoing?;
-        let a2 = v2.borrow(&self.token).outgoing?;
-
-        //let v1 = b0.borrow(&self.token).origin?;
-        //let v2 = a2.borrow(&self.token).origin?;
-
-        let a0 = b0.borrow(&self.token).twin?;
-        let b2 = a2.borrow(&self.token).twin?;
-
-        self.twin(a1, b1);
-
-        self.origin(v1, a1);
-        self.origin(v2, b1);
-
-        self.follow(a0, a1);
-        self.follow(a1, a2);
-
-        self.follow(b2, b1);
-        self.follow(b1, b0);
-
-        Some(())
-    }
-
-    fn mev(
-        &mut self,
-        from: ptr!(Vertex),
-        data: V,
-    ) -> (ptr!(Vertex), ptr!(HalfEdge), ptr!(HalfEdge)) {
-        let v = self.vertices.alloc(&mut self.token, data);
-        let a = self.half_edges.alloc(&mut self.token, ());
-        let b = self.half_edges.alloc(&mut self.token, ());
-
-        self.twin(a, b);
-
-        self.origin(v, a);
-        self.origin(from, b);
-
-        self.follow(a, b);
-        self.follow(b, a);
-
-        (v, a, b)
-    }
-
-    //fn mekh(&mut self, )*/
 }
 
-/*
-struct DcelDotOptions {
+#[cfg(test)]
+mod tests {
+    use crate::Dcel;
+
+    #[test]
+    fn mev_cycle() {
+        Dcel::<u32>::new(|mut dcel| {
+            let body = dcel.new_body();
+            let op = dcel.mevvlfs(*body, [0, 1]);
+            let op2 = dcel.mev(*op.shell, *op.loop_, *op.vertices[1], 2);
+            let op3 = dcel.mev(*op.shell, *op.loop_, *op2.new_vertex, 3);
+            dcel.melf(*op.shell, [*op3.new_vertex, *op.vertices[0]], *op.loop_);
+
+            let mut vertices = op
+                .loop_
+                .iter_half_edges(&dcel)
+                .map(|x| *x.origin().data())
+                .peekable();
+            assert!((0..4)
+                .cycle()
+                .skip(*vertices.peek().unwrap() as _)
+                .take(4)
+                .eq(vertices));
+        })
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DcelDotOptions {
     pub twin: bool,
     pub next: bool,
     pub prev: bool,
 }
 
 impl DcelDotOptions {
-    fn none() -> Self {
+    pub fn none() -> Self {
         Self {
             twin: false,
             next: false,
@@ -1242,7 +1358,7 @@ impl DcelDotOptions {
         }
     }
 
-    fn all() -> Self {
+    pub fn all() -> Self {
         Self {
             twin: true,
             next: true,
@@ -1251,103 +1367,93 @@ impl DcelDotOptions {
     }
 }
 
-fn dcel_write_dot(
-    dcel: &Dcel<(&'static str, [i64; 2])>,
-    f: &mut fmt::Formatter<'_>,
+pub fn dcel_write_dot<V: Debug>(
+    dcel: &Dcel<V>,
+    pos: impl Fn(&V) -> [f64; 2],
+    name: impl Fn(&V, &mut Formatter) -> fmt::Result,
+    f: &mut Formatter,
     opt: DcelDotOptions,
 ) -> fmt::Result {
-    use rand::Rng;
-    use std::collections::HashSet;
-
     writeln!(f, "digraph DCEL {{")?;
     writeln!(f, "node [shape = circle]")?;
     //writeln!(f, "nodesep = 1")?;
 
-    let mut rank = Vec::new();
+    for shell in dcel.iter_bodies().flat_map(Lens::iter_shells) {
+        for vertex in shell.iter_vertices() {
+            let p = pos(vertex.data());
 
-    for v in dcel.vertices.elements.iter() {
-        let v = v.borrow(&dcel.token);
-        if let Some(id) = v.id {
             writeln!(
                 f,
-                "vertex_{id} [label=\"{}\", pos=\"{},{}!\"]",
-                v.data.0, v.data.1[0], v.data.1[1]
-            );
-            rank.push(id);
+                "vertex_{} [label=\"{}\", pos=\"{},{}!\"]",
+                vertex.id(),
+                DisplayFn(|f| name(vertex.data(), f)),
+                p[0],
+                p[1]
+            )?;
         }
-    }
 
-    for h in dcel.half_edges.elements.iter() {
-        let h = h.borrow(&dcel.token);
-        if let Some(id) = h.id {
-            let twin = h.twin.unwrap().borrow(&dcel.token);
-            let twin_id = twin.id.unwrap();
+        for hedges in shell
+            .iter_edges()
+            .map(|x| x.half_edges())
+            .flat_map(|[he1, he2]| [[he1, he2], [he2, he1]])
+        {
+            let ids = hedges.map(Lens::id);
+            let vertices = hedges.map(|h| h.origin());
+            let points = vertices.map(|v| pos(v.data()));
 
-            let connect = |f: &mut fmt::Formatter<'_>,
-                           id: &str,
-                           label: &str,
-                           attr: &str,
-                           pts: [(&str, [f64; 2]); 2]|
-             -> Result<(), fmt::Error> {
-                let mut vec = [pts[1].1[1] - pts[0].1[1], pts[1].1[0] - pts[0].1[0]];
+            let mut diff = [points[1][1] - points[0][1], points[1][0] - points[0][0]];
 
-                let len = (vec[0] * vec[0] + vec[1] * vec[1]).sqrt();
-                vec[0] *= -0.075;
-                vec[1] *= 0.075;
+            let len = (diff[0] * diff[0] + diff[1] * diff[1]).sqrt();
+            diff[0] *= -0.075;
+            diff[1] *= 0.075;
 
-                let mid = [
-                    (pts[1].1[0] + pts[0].1[0]) / 2.0 + vec[0],
-                    (pts[1].1[1] + pts[0].1[1]) / 2.0 + vec[1],
-                ];
+            let mid = [
+                (points[1][0] + points[0][0]) / 2.0 + diff[0],
+                (points[1][1] + points[0][1]) / 2.0 + diff[1],
+            ];
 
-                writeln!(
-                    f,
-                    "{id} [pos=\"{},{}!\", shape=point, width=0.01, height=0.01]",
-                    mid[0], mid[1]
-                )?;
-                writeln!(f, "{} -> {id} [{attr}arrowhead=none]", pts[0].0)?;
-                writeln!(f, "{id} -> {} [{attr}label=\"{label}\"]", pts[1].0)?;
-
-                Ok(())
-            };
-
-            let a = h.origin.unwrap().borrow(&dcel.token);
-            let b = twin.origin.unwrap().borrow(&dcel.token);
-
-            connect(
+            writeln!(
                 f,
-                &format!("half_edge_{id}"),
-                &format!("{id}"),
-                "",
-                [
-                    (
-                        &format!("vertex_{}", a.id.unwrap()),
-                        [a.data.1[0] as _, a.data.1[1] as _],
-                    ),
-                    (
-                        &format!("vertex_{}", b.id.unwrap()),
-                        [b.data.1[0] as _, b.data.1[1] as _],
-                    ),
-                ],
+                "half_edge_{} [pos=\"{},{}!\", shape=point, width=0.01, height=0.01]",
+                ids[0], mid[0], mid[1]
+            )?;
+            writeln!(
+                f,
+                "vertex_{} -> half_edge_{} [arrowhead=none]",
+                vertices[0].id(),
+                ids[0]
+            )?;
+            writeln!(
+                f,
+                "half_edge_{} -> vertex_{} [label=\"{}\"]",
+                ids[0],
+                vertices[1].id(),
+                ids[0]
             )?;
 
             if opt.twin {
-                writeln!(f, "half_edge_{id} -> half_edge_{twin_id} [color=\"red\"]")?;
+                writeln!(
+                    f,
+                    "half_edge_{} -> half_edge_{} [color=\"red\"]",
+                    ids[0], ids[1]
+                )?;
             }
 
             if opt.next {
                 writeln!(
                     f,
-                    "half_edge_{id} -> half_edge_{} [color=\"green\"]",
-                    h.next.unwrap().borrow(&dcel.token).id.unwrap()
+                    "half_edge_{} -> half_edge_{} [color=\"green\"]",
+                    ids[0],
+                    hedges[0].next().id(),
                 )?;
             }
 
             if opt.prev {
                 writeln!(
                     f,
-                    "half_edge_{id} -> half_edge_{} [color=\"blue\"]",
-                    h.prev.unwrap().borrow(&dcel.token).id.unwrap()
+                    "half_edge_{} -> half_edge_{} [color=\"blue\"]",
+                    ids[0],
+                    hedges[0].prev().id(),
                 )?;
             }
         }
@@ -1356,55 +1462,57 @@ fn dcel_write_dot(
     writeln!(f, "}}")
 }
 
-impl_debug!(i32);
-
-struct DisplayFn<T>(T);
-impl<T: Fn(&mut fmt::Formatter<'_>) -> fmt::Result> fmt::Display for DisplayFn<T> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.0(f)
-    }
-}
-
-use std::io::Write;*/
+use std::io::Write;
 
 fn main() {
+    let show = |name, dcel: &Dcel<(&'static str, [i64; 2])>| {
+        write!(
+            &mut std::fs::File::create(name).unwrap(),
+            "{}",
+            DisplayFn(|f: &mut fmt::Formatter<'_>| dcel_write_dot(
+                dcel,
+                |v| v.1.map(|x| x as _),
+                |v, f| write!(f, "{}", v.0),
+                f,
+                DcelDotOptions {
+                    prev: false,
+                    next: true,
+                    twin: true,
+                }
+            ))
+        )
+        .unwrap();
+    };
+
     GhostToken::new(|token| {
         let arena = DcelArena::default();
-        let mut dcel = Dcel::new(token, &arena);
+        let mut dcel = Dcel::from_token(token, &arena);
 
         let body = dcel.new_body();
         // Mevvlfs(a, [w, n], l, f, s)
-        let op = dcel.mevvlfs(*body, [("W", [-4, 0]), ("N", [0, 4])]);
-        println!("{}", op.vertices[0].eq(*op.vertices[0], &dcel));
-        println!("{}", op.vertices[0].eq(*op.vertices[1], &dcel));
 
-        println!("{:?}", op.edge.lens(&dcel));
+        //let op = dcel.mevvlfs(*body, [("W", [-4, 0]), ("N", [0, 4])]);
+        let op = dcel.mevvlfs(*body, [("W", [-4, 0]), ("N", [0, 4])]);
+        let op2 = dcel.mev(*op.shell, *op.loop_, *op.vertices[1], ("E", [4, 0]));
+        let op3 = dcel.mev(*op.shell, *op.loop_, *op2.new_vertex, ("S", [0, -4]));
+
+        dcel.melf(*op.shell, [*op3.new_vertex, *op.vertices[0]], *op.loop_);
+        dcel.melf(*op.shell, [*op.vertices[0], *op2.new_vertex], *op.loop_);
+
+        show("cool_stuff.dot", &dcel);
+
+        /*println!("{:?}", op.edge.lens(&dcel));
         println!("{:?}", op.vertices[0].lens(&dcel));
         println!("{:?}", op.vertices[1].lens(&dcel));
         println!("{:?}", op.loop_.lens(&dcel));
-        dbg!(op.loop_.iter_half_edges(&dcel).rev().collect::<Vec<_>>());
         println!("{:?}", op.face.lens(&dcel));
-        println!("{:?}", op.shell.lens(&dcel));
+        println!("{:?}", op.shell.lens(&dcel));*/
 
-        dcel.undo(op);
+        //dbg!(body.lens(&dcel));
+
+        // dcel.undo(op);
 
         /*
-        let show = |name, dcel: &Dcel<(&'static str, [i64; 2])>| {
-            write!(
-                &mut std::fs::File::create(name).unwrap(),
-                "{}",
-                DisplayFn(|f: &mut fmt::Formatter<'_>| dcel_write_dot(
-                    dcel,
-                    f,
-                    DcelDotOptions {
-                        prev: false,
-                        next: true,
-                        twin: false,
-                    }
-                ))
-            )
-            .unwrap();
-        };
 
         let (a, [w, n], _) = dcel.mevvls([("W", [-4, 0]), ("N", [0, 4])]);
         show("1.dot", &dcel);
@@ -1443,67 +1551,3 @@ fn main() {
            );*/
     });
 }
-
-/*
-trait DcelDebug<'brand> {
-    fn fmt(
-        &self,
-        long: bool,
-        token: &GhostToken<'brand>,
-        f: &mut fmt::Formatter<'_>,
-    ) -> Result<(), fmt::Error>;
-}
-
-macro_rules! impl_debug {
-    ($T:ty) => {
-        impl<'brand> DcelDebug<'brand> for $T {
-            fn fmt(
-                &self,
-                long: bool,
-                token: &GhostToken<'brand>,
-                f: &mut fmt::Formatter<'_>,
-            ) -> Result<(), fmt::Error> {
-                fmt::Debug::fmt(self, f)?;
-                writeln!(f, "")
-            }
-        }
-    };
-}
-
-impl<'brand, T: DcelDebug<'brand>> DcelDebug<'brand> for Option<T> {
-    fn fmt(
-        &self,
-        long: bool,
-        token: &GhostToken<'brand>,
-        f: &mut fmt::Formatter<'_>,
-    ) -> Result<(), fmt::Error> {
-        match self {
-            None => write!(f, "None"),
-            Some(x) => DcelDebug::fmt(x, long, token, f),
-        }
-    }
-}
-
-macro_rules! impl_entity_debug {
-    ($T:ident $(, $($fields:ident),*)?) => {
-        impl<'brand, 'arena, V> DcelDebug<'brand> for &'arena GhostCell<'brand, $T<'brand, 'arena, V>> where V: DcelDebug<'brand> {
-            fn fmt(
-                &self,
-                long: bool,
-                token: &GhostToken<'brand>,
-                f: &mut fmt::Formatter<'_>,
-            ) -> Result<(), fmt::Error> {
-                writeln!(f, "{} {:?}", stringify!($T), self.borrow(token).id)?;
-
-                if long {
-                    $($(
-                        write!(f, "\t{} = ", stringify!($fields))?;
-                        DcelDebug::fmt(&self.borrow(token).$fields, false, token, f)?;
-                    )*)?
-                }
-
-                Ok(())
-            }
-        }
-    };
-}*/

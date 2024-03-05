@@ -3,14 +3,8 @@ name = "dcel"
 version = "0.1.0"
 edition = "2021"
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
-
 [dependencies]
-anyhow = "1.0.79"
-either = "1.9.0"
-ghost-cell = "0.2.3"
-ouroboros = "0.18.2"
-paste = "1.0.14"
-rand = "0.8.5"
-stl_io = "0.7.0"
-typed-arena = "2.0.2"
+ghost-cell = "0.2"
+paste = "1"
+thiserror = "1"
+typed-arena = "2"
