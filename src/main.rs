@@ -4,11 +4,40 @@ use core::ops::Deref;
 pub use ghost_cell::{GhostBorrow, GhostCell, GhostToken};
 use paste::paste;
 use std::{
+    convert::Infallible,
     fmt::{self, Debug, Display, Formatter},
     hash::{Hash, Hasher},
 };
 use thiserror::Error;
 pub use typed_arena::Arena;
+
+macro_rules! try_check {
+    ($this:ident, $dcel:ident) => {
+        match $this.check($dcel) {
+            Ok(x) => x,
+            Err(e) => return Err(OperatorErr::new($this, e)),
+        }
+    };
+}
+
+#[macro_use]
+mod entity;
+use entity::*;
+
+mod entity_iterator;
+pub use entity_iterator::*;
+
+mod dot;
+pub use dot::*;
+
+#[cfg(test)]
+mod tests;
+
+mod mevvlfs;
+pub use mevvlfs::*;
+
+mod mekh;
+pub use mekh::*;
 
 pub trait ReflAsRef<T> {
     fn as_ref(&self) -> &T;
@@ -293,341 +322,8 @@ impl<'tok, 'brand, 'arena, T: Entity<'brand, 'arena>> lens_t!(T) {
     }
 }
 
-pub struct EntityIterator<'tok, 'brand, 'arena, T>(Option<(lens_t!(T), lens_t!(T))>);
-
-impl<'tok, 'brand, 'arena, T> Clone for EntityIterator<'tok, 'brand, 'arena, T> {
-    fn clone(&self) -> Self {
-        Self(self.0)
-    }
-}
-
-impl<'tok, 'brand, 'arena, T> Copy for EntityIterator<'tok, 'brand, 'arena, T> {}
-
-impl<'tok, 'brand, 'arena, T: Entity<'brand, 'arena>> EntityIterator<'tok, 'brand, 'arena, T> {
-    fn new(start: Option<ptr_t!(T)>, token: &'tok impl ReflAsRef<GhostToken<'brand>>) -> Self {
-        Self(start.map(|s| {
-            let l = Lens::new(s, token);
-            (l, l.prev())
-        }))
-    }
-}
-
-impl<'tok, 'brand, 'arena, T: Entity<'brand, 'arena>> Iterator
-    for EntityIterator<'tok, 'brand, 'arena, T>
-{
-    type Item = lens_t!(T);
-
-    fn next(&mut self) -> Option<Self::Item> {
-        let range = self.0.as_mut()?;
-        let ret = range.0;
-
-        if range.0 == range.1 {
-            self.0 = None;
-        } else {
-            range.0 = range.0.next();
-        }
-
-        Some(ret)
-    }
-}
-
-impl<'tok, 'brand, 'arena, T: Entity<'brand, 'arena>> DoubleEndedIterator
-    for EntityIterator<'tok, 'brand, 'arena, T>
-{
-    fn next_back(&mut self) -> Option<Self::Item> {
-        let range = self.0.as_mut()?;
-        let ret = range.1;
-
-        if range.0 == range.1 {
-            self.0 = None;
-        } else {
-            range.1 = range.1.prev();
-        }
-
-        Some(ret)
-    }
-}
-
-// trait for a kind of topological element (i.e. Vertex, HalfEdge, Face)
-trait Entity<'brand, 'arena>: Eq + Sized {
-    fn clear(&mut self);
-
-    fn type_name() -> &'static str;
-
-    fn maybe_id(&self) -> Option<usize>;
-    fn id(&self) -> usize {
-        self.maybe_id().unwrap()
-    }
-    fn alive(&self) -> bool {
-        self.maybe_id().is_some()
-    }
-
-    fn maybe_next(&self) -> Option<ptr_t!(Self)>;
-    fn next(&self) -> ptr_t!(Self) {
-        self.maybe_next().unwrap()
-    }
-    fn set_next(&mut self, x: ptr_t!(Self)) {
-        self.set_next_opt(Some(x));
-    }
-    fn set_next_opt(&mut self, x: Option<ptr_t!(Self)>);
-
-    fn maybe_prev(&self) -> Option<ptr_t!(Self)>;
-    fn prev(&self) -> ptr_t!(Self) {
-        self.maybe_prev().unwrap()
-    }
-    fn set_prev(&mut self, x: ptr_t!(Self)) {
-        self.set_prev_opt(Some(x));
-    }
-    fn set_prev_opt(&mut self, x: Option<ptr_t!(Self)>);
-
-    fn list_add(
-        this: ptr_t!(Self),
-        list: Option<ptr_t!(Self)>,
-        token: &mut impl ReflAsMut<GhostToken<'brand>>,
-    ) -> ptr_t!(Self) {
-        let (next, prev) = if let Some(first) = list {
-            (first, first.prev(token))
-        } else {
-            (this, this)
-        };
-
-        this.set_next(next, token);
-        this.set_prev(prev, token);
-        prev.set_next(this, token);
-        next.set_prev(this, token);
-
-        next
-    }
-
-    fn list_remove(
-        this: ptr_t!(Self),
-        token: &mut impl ReflAsMut<GhostToken<'brand>>,
-    ) -> Option<ptr_t!(Self)> {
-        let next = this.next(token);
-        let prev = this.prev(token);
-
-        if this.eq(next, token) {
-            return None;
-        }
-
-        prev.set_next(next, token);
-        next.set_prev(prev, token);
-
-        Some(next)
-    }
-}
-
-macro_rules! entity {
-	($name:ident : $T:ident $(($init_name:ident : $init_ty:ty))?
-		$(, $($custom_field:ident : $custom_ty:ty = $custom_expr:expr),* )?
-		$(;
-			$( $field_vis:vis $field:ident
-				$([ $list_singular:ident : $list_name:ident $(($list_init:ty))? $($list_back:ident)? ])?
-			 : $field_ty:ident ),*
-		)?
-	) => { paste! {
-		pub struct $T<'brand, 'arena, V> {
-			id: Option<usize>,
-			next: Option<ptr!($T)>,
-			prev: Option<ptr!($T)>,
-			$($($custom_field: $custom_ty,)*)?
-			$($($field: Option<ptr!($field_ty)>,)*)?
-		}
-
-		impl<'brand, 'arena, V> $T<'brand, 'arena, V> {
-			fn new($($init_name: $init_ty,)? dcel: &mut Dcel<'brand, 'arena, V>) -> own_t!(Self) {
-				let id = Some(dcel.$name.next_id());
-				dcel.$name.alloc(Self {
-					id,
-					prev: None,
-					next: None,
-					$($($custom_field: $custom_expr,)*)?
-					$($($field: None,)*)?
-				}, &mut dcel.token)
-			}
-		}
-
-		impl<'brand, 'arena, V> Entity<'brand, 'arena> for $T<'brand, 'arena, V> {
-			fn clear(&mut self) {
-				self.id = None;
-				#[cfg(debug_assertions)]
-				{
-					self.prev = None;
-					self.next = None;
-					$($(self.$field = None;)*)?
-				}
-			}
-
-			fn type_name() -> &'static str {
-				stringify!($T)
-			}
-
-			fn maybe_id(&self) -> Option<usize> {
-				self.id
-			}
-
-			fn maybe_next(&self) -> Option<ptr_t!(Self)> {
-				self.next
-			}
-
-			fn set_next_opt(&mut self, x: Option<ptr_t!(Self)>) {
-				self.next = x;
-			}
-
-			fn maybe_prev(&self) -> Option<ptr_t!(Self)> {
-				self.prev
-			}
-
-			fn set_prev_opt(&mut self, x: Option<ptr_t!(Self)>) {
-				self.prev = x;
-			}
-		}
-
-		#[allow(unused)]
-		impl<'brand, 'arena, V> ptr!($T) {
-			$($(
-				$field_vis fn $field(self, token: &impl ReflAsRef<GhostToken<'brand>>) -> ptr!($field_ty) {
-					self.[<maybe_ $field>](token).unwrap()
-				}
-
-				fn [<maybe_ $field>](self, token: &impl ReflAsRef<GhostToken<'brand>>) -> Option<ptr!($field_ty)> {
-					self.borrow(token).$field
-				}
-
-				fn [<set_ $field>](self, x: ptr!($field_ty), token: &mut impl ReflAsMut<GhostToken<'brand>>) {
-					self.[<set_opt_ $field>](Some(x), token);
-				}
-
-				fn [<set_opt_ $field>](self, x: Option<ptr!($field_ty)>, token: &mut impl ReflAsMut<GhostToken<'brand>>,) {
-					self.borrow_mut(token).$field = x;
-				}
-
-				$(
-					pub fn [<iter_ $field>]<'tok>(
-						self,
-						token: &'tok impl ReflAsRef<GhostToken<'brand>>,
-					) -> EntityIterator<'tok, 'brand, 'arena, $field_ty<'brand, 'arena, V>>
-					{
-						EntityIterator::new(self.[<maybe_ $field>](token), token)
-					}
-
-					pub fn [<iter_mut_ $field>]<T: ReflAsMut<GhostToken<'brand>>>(
-						self,
-						token: &mut T,
-						mut f: impl FnMut(ptr!($field_ty), &mut T),
-					) {
-						let Some(mut item) = self.[<maybe_ $field>](token) else {
-							return;
-						};
-
-						let last = item.prev(token);
-						while {
-							f(item, token);
-							item = item.next(token);
-							!item.eq(last, token)
-						} {}
-					}
-
-					fn [<add_ $list_singular>](
-						self,
-						x: ptr!($field_ty),
-						token: &mut impl ReflAsMut<GhostToken<'brand>>,
-					) {
-						let list = Entity::list_add(x, self.[<maybe_ $field>](token), token);
-						self.[<set_ $field>](list, token);
-
-						$(
-							let [<_ $list_back>] = ();
-							x.[<set_ $name>](self, token);
-						)?
-					}
-
-					fn [<add_new_ $list_singular>](
-						self,
-						$(init: $list_init,)?
-						dcel: &mut Dcel<'brand, 'arena, V>,
-					) -> own!($field_ty) {
-						let x = $field_ty::new($(init as $list_init,)? dcel);
-						self.[<add_ $list_singular>](*x, dcel);
-						x
-					}
-				)?
-			)*)?
-		}
-
-		#[allow(unused)]
-		impl<'tok, 'brand, 'arena, V> lens!($T) {
-			$($(
-				$field_vis fn $field(self) -> lens!($field_ty) {
-					self.item.$field(&self).lens(self.token)
-				}
-
-				fn [<maybe_ $field>](self) -> Option<lens!($field_ty)> {
-					self.item.[<maybe_ $field>](&self).map(|x| x.lens(self.token))
-				}
-
-				$(
-					pub fn [<iter_ $field>](self) -> EntityIterator<'tok, 'brand, 'arena, $field_ty<'brand, 'arena, V>> {
-						let [<_ $list_singular>] = ();
-						self.item.[<iter_ $field>](self.token)
-					}
-				)?
-
-				fn [<debug_ $field>](self, f: &mut Formatter) -> fmt::Result
-				where V: Debug
-				{
-					$({
-						let [<_ $list_singular>] = ();
-						if true {
-							// return short_debug_list(self.[<iter_ $field>](), f);
-							return f.debug_list().entries(self.[<iter_ $field>]()).finish();
-						}
-					})?
-					short_debug(self.$field(), f)
-				}
-			)*)?
-		}
-
-		impl<'tok, 'brand, 'arena, V: Debug> Debug for lens!($T) {
-			fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-				f.debug_struct(stringify!($T))
-					.field("id", &self.id())
-					.field("prev", &short_debug_fn(self.prev()))
-					.field("next", &short_debug_fn(self.next()))
-					$($(
-						.field(stringify!($field), &DisplayFn(|f| self.[<debug_ $field>](f)))
-					)*)?
-					$($(
-						.field(stringify!($custom_field), &DisplayFn(|f| self.[<debug_ $custom_field>](f)))
-					)*)?
-					.finish()
-			}
-		}
-
-		#[allow(unused)]
-		impl<'brand, 'arena, V> Own<'brand, 'arena, $T<'brand, 'arena, V>> {
-			fn free(self, dcel: &mut Dcel<'brand, 'arena, V>) {
-				dcel.$name.free(&mut dcel.token, self)
-			}
-		}
-
-		impl<'brand, 'arena, V> Hash for $T<'brand, 'arena, V> {
-			fn hash<H: Hasher>(&self, state: &mut H) {
-				self.id.hash(state);
-			}
-		}
-
-		impl<'brand, 'arena, V> PartialEq for $T<'brand, 'arena, V> {
-			fn eq(&self, other: &Self) -> bool {
-				self.id() == other.id()
-			}
-		}
-		impl<'brand, 'arena, V> Eq for $T<'brand, 'arena, V> {}
-	}};
-}
-
 entity!(vertex: Vertex (init: V),
-    data: V = init;
+    data: Option<V> = Some(init);
     outgoing: HalfEdge
 );
 
@@ -666,13 +362,21 @@ impl<'tok, 'brand, 'arena, V> Iterator for OutgoingIterator<'tok, 'brand, 'arena
     }
 }
 
-impl<'brand, 'arena, V: Debug> ptr!(Vertex) {
+impl<'brand, 'arena, V> own!(Vertex) {
+    fn destroy(self, dcel: &mut Dcel<'brand, 'arena, V>) -> V {
+        let data = self.borrow_mut(dcel).data.take().unwrap();
+        self.free(dcel);
+        data
+    }
+}
+
+impl<'brand, 'arena, V> ptr!(Vertex) {
     pub fn data<'tok, 'out>(self, token: &'tok impl ReflAsRef<GhostToken<'brand>>) -> &'out V
     where
         'arena: 'out,
         'tok: 'out,
     {
-        &self.borrow(token).data
+        self.borrow(token).data.as_ref().unwrap()
     }
 
     pub fn mut_data<'tok, 'out>(
@@ -683,7 +387,7 @@ impl<'brand, 'arena, V: Debug> ptr!(Vertex) {
         'arena: 'out,
         'tok: 'out,
     {
-        &mut self.borrow_mut(token).data
+        self.borrow_mut(token).data.as_mut().unwrap()
     }
 
     pub fn iter_outgoing<'tok>(
@@ -704,7 +408,7 @@ impl<'brand, 'arena, V: Debug> ptr!(Vertex) {
     }
 }
 
-impl<'tok, 'brand, 'arena, V: Debug> lens!(Vertex) {
+impl<'tok, 'brand, 'arena, V> lens!(Vertex) {
     pub fn data(&self) -> &V {
         self.item.data(self)
     }
@@ -717,7 +421,10 @@ impl<'tok, 'brand, 'arena, V: Debug> lens!(Vertex) {
         self.iter_outgoing().find(|x| x.loop_().eq(loop_))
     }
 
-    fn debug_data(self, f: &mut Formatter) -> fmt::Result {
+    fn debug_data(self, f: &mut Formatter) -> fmt::Result
+    where
+        V: Debug,
+    {
         self.data().fmt(f)
     }
 }
@@ -734,6 +441,11 @@ impl<'brand, 'arena, V> ptr!(HalfEdge) {
     pub fn target(self, token: &impl ReflAsRef<GhostToken<'brand>>) -> ptr!(Vertex) {
         self.twin(token).origin(token)
     }
+
+    fn update_origin(self, v: ptr!(Vertex), token: &mut impl ReflAsMut<GhostToken<'brand>>) {
+        self.set_origin(v, token);
+        v.set_outgoing(self, token);
+    }
 }
 
 impl<'tok, 'brand, 'arena, V> lens!(HalfEdge) {
@@ -747,9 +459,59 @@ entity!(loop_: Loop;
     pub face: Face
 );
 
+impl<'brand, 'arena, V> ptr!(Loop) {
+    pub fn is_outer(self, token: &impl ReflAsRef<GhostToken<'brand>>) -> bool {
+        self.lens(token).is_outer()
+    }
+
+    fn update_connectivity(self, token: &mut impl ReflAsMut<GhostToken<'brand>>) {
+        self.iter_mut_half_edges(token, |x, token| x.set_loop_(self, token));
+    }
+}
+
+impl<'tok, 'brand, 'arena, V> lens!(Loop) {
+    pub fn is_outer(self) -> bool {
+        self.face().outer_loop() == self
+    }
+}
+
 entity!(edge: Edge,
     half_edges: Option<[own!(HalfEdge); 2]> = None
 );
+
+impl<'brand, 'arena, V> Edge<'brand, 'arena, V> {
+    fn create(
+        shell: ptr!(Shell),
+        dcel: &mut Dcel<'brand, 'arena, V>,
+    ) -> (own!(Edge), [ptr!(HalfEdge); 2]) {
+        let edge = shell.add_new_edge(dcel);
+
+        let he1_own = HalfEdge::new(dcel);
+        let he2_own = HalfEdge::new(dcel);
+
+        let he1 = *he1_own;
+        let he2 = *he2_own;
+
+        edge.borrow_mut(dcel).half_edges = Some([he1_own, he2_own]);
+        // edge.set_half_edges([he1_own, he2_own], dcel);
+
+        he1.set_twin(he2, dcel);
+        he2.set_twin(he1, dcel);
+        he1.set_edge(*edge, dcel);
+        he2.set_edge(*edge, dcel);
+
+        (edge, [he1, he2])
+    }
+}
+
+impl<'brand, 'arena, V> own!(Edge) {
+    fn destroy(self, dcel: &mut Dcel<'brand, 'arena, V>) {
+        let [a, b] = self.borrow_mut(dcel).half_edges.take().unwrap();
+        self.free(dcel);
+        a.free(dcel);
+        b.free(dcel);
+    }
+}
 
 impl<'brand, 'arena, V> ptr!(Edge) {
     pub fn half_edges(self, token: &impl ReflAsRef<GhostToken<'brand>>) -> [ptr!(HalfEdge); 2] {
@@ -761,20 +523,14 @@ impl<'brand, 'arena, V> ptr!(Edge) {
         self.half_edges(token).map(|x| x.origin(token))
     }
 
+    /*
     fn set_half_edges(
         self,
         x: [own!(HalfEdge); 2],
         token: &mut impl ReflAsMut<GhostToken<'brand>>,
     ) {
         self.borrow_mut(token).half_edges = Some(x);
-    }
-
-    fn take_half_edges(
-        self,
-        token: &mut impl ReflAsMut<GhostToken<'brand>>,
-    ) -> [own!(HalfEdge); 2] {
-        self.borrow_mut(token).half_edges.take().unwrap()
-    }
+    }*/
 }
 
 impl<'tok, 'brand, 'arena, V> lens!(Edge) {
@@ -795,7 +551,7 @@ impl<'tok, 'brand, 'arena, V> lens!(Edge) {
 }
 
 entity!(face: Face;
-    outer_loops[outer_loop: loop_ back]: Loop,
+    pub outer_loop: Loop,
     inner_loops[inner_loop: loop_ back]: Loop,
     pub shell: Shell
 );
@@ -848,15 +604,6 @@ impl<'brand, 'arena, T: Entity<'brand, 'arena>> Allocator<'brand, 'arena, T> {
     }
 }
 
-pub struct Mevvlfs<'brand, 'arena, V> {
-    pub body: ptr!(Body),
-    pub edge: own!(Edge),
-    pub vertices: [own!(Vertex); 2],
-    pub loop_: own!(Loop),
-    pub face: own!(Face),
-    pub shell: own!(Shell),
-}
-
 pub struct Melf<'brand, 'arena, V> {
     pub shell: ptr!(Shell),
     pub vertices: [ptr!(Vertex); 2],
@@ -881,46 +628,40 @@ pub struct Mve<'brand, 'arena, V> {
     pub vertex: own!(Vertex),
 }
 
-pub enum EulerOp<'brand, 'arena, V> {
-    Mevvlfs(Mevvlfs<'brand, 'arena, V>),
-    Melf(Melf<'brand, 'arena, V>),
-    Mev(Mev<'brand, 'arena, V>),
-    Mve(Mve<'brand, 'arena, V>),
+pub struct OperatorErr<T, E> {
+    pub op: T,
+    pub err: E,
 }
 
-macro_rules! euler_op {
-    ($x:ident) => {
-        impl<'brand, 'arena, V> From<$x<'brand, 'arena, V>> for EulerOp<'brand, 'arena, V> {
-            fn from(op: $x<'brand, 'arena, V>) -> Self {
-                Self::$x(op)
-            }
-        }
-    };
+impl<T, E> OperatorErr<T, E> {
+    pub fn new(op: T, err: E) -> Self {
+        Self { op, err }
+    }
 }
 
-euler_op!(Mevvlfs);
-euler_op!(Melf);
-euler_op!(Mev);
-euler_op!(Mve);
+impl<T, E: std::error::Error> std::error::Error for OperatorErr<T, E> {}
+impl<T, E: Debug> Debug for OperatorErr<T, E> {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+        self.err.fmt(f)
+    }
+}
+impl<T, E: Display> Display for OperatorErr<T, E> {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+        self.err.fmt(f)
+    }
+}
 
-#[derive(Debug, Error)]
-pub enum KevvlfsError {
-    #[error("edge vertices do not equal vertices")]
-    EdgeVerticesMismatch,
-    #[error("half_edge loop does not equal loop")]
-    HalfEdgeLoopMismatch,
-    #[error("loop is not cycle between half edges")]
-    InvalidLoop,
-    #[error("face outer loop does not match loop")]
-    FaceOuterLoopMismatch,
-    #[error("face has inner loops")]
-    FaceHasInnerLoops,
-    #[error("shell has more than one face")]
-    ShellHasMoreThanOneFace,
-    #[error("shell face does not match face")]
-    ShellFaceMismatch,
-    #[error("shell body does not match body")]
-    ShellBodyMismatch,
+pub trait Operator<'brand, 'arena, V>: Sized {
+    type Inverse; //: Operator<'brand, 'arena, V>;
+    type Error: std::error::Error;
+    type Check;
+
+    fn check(&self, dcel: &Dcel<'brand, 'arena, V>) -> Result<Self::Check, Self::Error>;
+
+    fn apply(
+        self,
+        dcel: &mut Dcel<'brand, 'arena, V>,
+    ) -> Result<Self::Inverse, OperatorErr<Self, Self::Error>>;
 }
 
 pub struct DcelArena<'brand, 'arena, V> {
@@ -971,7 +712,7 @@ impl<'brand, 'arena, V> ReflAsMut<GhostToken<'brand>> for Dcel<'brand, 'arena, V
     }
 }
 
-impl<'brand, 'arena, V: Debug> Dcel<'brand, 'arena, V> {
+impl<'brand, 'arena, V> Dcel<'brand, 'arena, V> {
     pub fn from_token(token: GhostToken<'brand>, ar: &'arena DcelArena<'brand, 'arena, V>) -> Self {
         Self {
             token,
@@ -986,7 +727,7 @@ impl<'brand, 'arena, V: Debug> Dcel<'brand, 'arena, V> {
         }
     }
 
-    pub fn new<R, F, W: Debug>(fun: F) -> R
+    pub fn new<R, F, W>(fun: F) -> R
     where
         for<'new_brand, 'new_arena> F: FnOnce(Dcel<'new_brand, 'new_arena, W>) -> R,
     {
@@ -1015,147 +756,33 @@ impl<'brand, 'arena, V: Debug> Dcel<'brand, 'arena, V> {
         EntityIterator::new(self.bodies, self)
     }
 
-    fn new_edge(&mut self, shell: ptr!(Shell)) -> (own!(Edge), [ptr!(HalfEdge); 2]) {
-        let edge = shell.add_new_edge(self);
+    // fn new_edge(&mut self, shell: ptr!(Shell)) -> (own!(Edge), [ptr!(HalfEdge); 2]) {}
 
-        let he1_own = HalfEdge::new(self);
-        let he2_own = HalfEdge::new(self);
-
-        let he1 = *he1_own;
-        let he2 = *he2_own;
-
-        edge.set_half_edges([he1_own, he2_own], self);
-
-        he1.set_twin(he2, self);
-        he2.set_twin(he1, self);
-        he1.set_edge(*edge, self);
-        he2.set_edge(*edge, self);
-
-        (edge, [he1, he2])
-    }
-
-    #[inline(always)]
-    fn origin(&mut self, v: ptr!(Vertex), h: ptr!(HalfEdge)) {
-        v.set_outgoing(h, self);
-        h.set_origin(v, self)
-    }
-
-    #[inline(always)]
     fn follow(&mut self, prev: ptr!(HalfEdge), next: ptr!(HalfEdge)) {
         next.set_prev(prev, self);
         prev.set_next(next, self);
     }
 
-    pub fn undo(&mut self, op: impl Into<EulerOp<'brand, 'arena, V>>) {
-        match op.into() {
-            EulerOp::Mevvlfs(x) => self.kevvlfs(x),
-            _ => todo!(),
-        }
-    }
-
-    // Make Edge-Vertex-Vertex-Loop-Face-Shell
-
-    pub fn mevvlfs(&mut self, body: ptr!(Body), data: [V; 2]) -> Mevvlfs<'brand, 'arena, V> {
-        let [d1, d2] = data;
-
-        let shell = body.add_new_shell(self);
-        let face = shell.add_new_face(self);
-        let (edge, [a, b]) = self.new_edge(*shell);
-        let loop_ = face.add_new_outer_loop(self);
-        let v1 = shell.add_new_vertex(d1, self);
-        let v2 = shell.add_new_vertex(d2, self);
-
-        self.origin(*v1, a);
-        self.origin(*v2, b);
-
-        loop_.add_half_edge(a, self);
-        loop_.add_half_edge(b, self);
-
-        Mevvlfs {
-            body,
-            edge,
-            vertices: [v1, v2],
-            loop_,
-            face,
-            shell,
-        }
-    }
-
-    pub fn check_kevvlfs(&self, op: &Mevvlfs<'brand, 'arena, V>) -> Result<(), KevvlfsError> {
-        let Mevvlfs {
-            body,
-            edge,
-            vertices: [v1, v2],
-            loop_,
-            face,
-            shell,
-        } = op;
-
-        mklens!(self, edge, loop_, face, shell, body, v1, v2);
-
-        let [a, b] = edge.half_edges();
-        let edge_verts = edge.vertices();
-
-        or_err(
-            edge_verts == [v1, v2] || edge_verts == [v2, v1],
-            KevvlfsError::EdgeVerticesMismatch,
-        )?;
-
-        or_err(a.loop_() == loop_, KevvlfsError::HalfEdgeLoopMismatch)?;
-        or_err(a.next() == b, KevvlfsError::InvalidLoop)?;
-        or_err(b.next() == a, KevvlfsError::InvalidLoop)?;
-
-        or_err(
-            face.outer_loops() == loop_,
-            KevvlfsError::FaceOuterLoopMismatch,
-        )?;
-        or_err(
-            face.maybe_inner_loops().is_none(),
-            KevvlfsError::FaceHasInnerLoops,
-        )?;
-
-        or_err(face.next() == face, KevvlfsError::ShellHasMoreThanOneFace)?;
-        or_err(shell.faces() == face, KevvlfsError::ShellFaceMismatch)?;
-        or_err(shell.body() == body, KevvlfsError::ShellBodyMismatch)?;
-
-        Ok(())
-    }
-
-    pub fn try_kevvlfs(
+    pub fn mevvlfs(
         &mut self,
-        op: Mevvlfs<'brand, 'arena, V>,
-    ) -> Result<(), (Mevvlfs<'brand, 'arena, V>, KevvlfsError)> {
-        if let Err(err) = self.check_kevvlfs(&op) {
-            return Err((op, err));
-        }
-
-        let Mevvlfs {
-            body,
-            edge,
-            vertices: [v1, v2],
-            loop_,
-            face,
-            shell,
-        } = op;
-
-        let [a, b] = edge.take_half_edges(self);
-        let shells = Entity::list_remove(*shell, self);
-        body.set_opt_shells(shells, self);
-
-        edge.free(self);
-        a.free(self);
-        b.free(self);
-        loop_.free(self);
-        face.free(self);
-        shell.free(self);
-        v1.free(self);
-        v2.free(self);
-
-        Ok(())
+        body: ptr!(Body),
+        data: [V; 2],
+    ) -> Result<Kevvlfs<'brand, 'arena, V>, OperatorErr<Mevvlfs<'brand, 'arena, V>, Infallible>>
+    {
+        Mevvlfs::new(body, data).apply(self)
     }
 
-    pub fn kevvlfs(&mut self, op: Mevvlfs<'brand, 'arena, V>) {
-        self.try_kevvlfs(op).map_err(|(_, e)| e).unwrap()
+    pub fn kevvlfs(
+        &mut self,
+        body: ptr!(Body),
+        edge: own!(Edge),
+        vertices: [own!(Vertex); 2],
+        loop_: own!(Loop),
+        face: own!(Face),
+        shell: own!(Shell),
+    ) -> Result<Mevvlfs<'brand, 'arena, V>, OperatorErr<Kevvlfs<'brand, 'arena, V>, KevvlfsError>>
+    {
+        Kevvlfs::new(body, edge, vertices, loop_, face, shell).apply(self)
     }
 
     pub fn mev(
@@ -1177,7 +804,7 @@ impl<'brand, 'arena, V: Debug> Dcel<'brand, 'arena, V> {
         //  a /   \ d
         //   <     <
 
-        let (edge, [b, c]) = self.new_edge(shell);
+        let (edge, [b, c]) = Edge::create(shell, self);
         let new_vertex = shell.add_new_vertex(data, self);
 
         let a = old_vertex.find_outgoing(loop_, self).unwrap();
@@ -1190,8 +817,8 @@ impl<'brand, 'arena, V: Debug> Dcel<'brand, 'arena, V> {
         b.set_loop_(loop_, self);
         c.set_loop_(loop_, self);
 
-        self.origin(*new_vertex, b);
-        self.origin(old_vertex, c);
+        b.update_origin(*new_vertex, self);
+        c.update_origin(old_vertex, self);
 
         Mev {
             shell,
@@ -1223,9 +850,9 @@ impl<'brand, 'arena, V: Debug> Dcel<'brand, 'arena, V> {
         //     <               <
         //
 
-        let (edge, [a1, b1]) = self.new_edge(shell);
+        let (edge, [a1, b1]) = Edge::create(shell, self);
         let face = shell.add_new_face(self);
-        let new_loop = face.add_new_outer_loop(self);
+        let new_loop = Loop::new(self); // face.add_new_outer_loop(self);
 
         let [v1, v2] = vertices;
         let [b0, a2] = vertices.map(|v| v.find_outgoing(old_loop, self).unwrap());
@@ -1233,17 +860,21 @@ impl<'brand, 'arena, V: Debug> Dcel<'brand, 'arena, V> {
         let a0 = b0.prev(self);
         let b2 = a2.prev(self);
 
-        self.origin(v1, a1);
+        new_loop.set_face(*face, self);
+        face.set_outer_loop(*new_loop, self);
+
+        a1.update_origin(v1, self);
         self.follow(a0, a1);
         self.follow(a1, a2);
         old_loop.set_half_edges(a1, self);
         a1.set_loop_(old_loop, self);
 
-        self.origin(v2, b1);
+        b1.update_origin(v2, self);
         self.follow(b2, b1);
         self.follow(b1, b0);
         new_loop.set_half_edges(b1, self);
-        new_loop.iter_mut_half_edges(self, |x, dcel| x.set_loop_(*new_loop, dcel));
+        new_loop.update_connectivity(self);
+        // new_loop.iter_mut_half_edges(self, |x, dcel| x.set_loop_(*new_loop, dcel));
 
         Melf {
             shell,
@@ -1281,7 +912,7 @@ impl<'brand, 'arena, V: Debug> Dcel<'brand, 'arena, V> {
         //                       \ b3
         //                        <
 
-        let (new_edge, [a2, b2]) = self.new_edge(shell);
+        let (new_edge, [a2, b2]) = Edge::create(shell, self);
         let v = shell.add_new_vertex(data, self);
 
         let [a1, b1] = old_edge.half_edges(self);
@@ -1297,9 +928,9 @@ impl<'brand, 'arena, V: Debug> Dcel<'brand, 'arena, V> {
             b3 = a2;
         }
 
-        self.origin(*v, a2);
-        self.origin(*v, b1);
-        self.origin(v2, b2);
+        a2.update_origin(*v, self);
+        b1.update_origin(*v, self);
+        b2.update_origin(v2, self);
 
         self.follow(a1, a2);
         self.follow(a2, a3);
@@ -1313,153 +944,66 @@ impl<'brand, 'arena, V: Debug> Dcel<'brand, 'arena, V> {
             vertex: v,
         }
     }
-}
 
-#[cfg(test)]
-mod tests {
-    use crate::Dcel;
-
-    #[test]
-    fn mev_cycle() {
-        Dcel::<u32>::new(|mut dcel| {
-            let body = dcel.new_body();
-            let op = dcel.mevvlfs(*body, [0, 1]);
-            let op2 = dcel.mev(*op.shell, *op.loop_, *op.vertices[1], 2);
-            let op3 = dcel.mev(*op.shell, *op.loop_, *op2.new_vertex, 3);
-            dcel.melf(*op.shell, [*op3.new_vertex, *op.vertices[0]], *op.loop_);
-
-            let mut vertices = op
-                .loop_
-                .iter_half_edges(&dcel)
-                .map(|x| *x.origin().data())
-                .peekable();
-            assert!((0..4)
-                .cycle()
-                .skip(*vertices.peek().unwrap() as _)
-                .take(4)
-                .eq(vertices));
-        })
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct DcelDotOptions {
-    pub twin: bool,
-    pub next: bool,
-    pub prev: bool,
-}
-
-impl DcelDotOptions {
-    pub fn none() -> Self {
-        Self {
-            twin: false,
-            next: false,
-            prev: false,
-        }
+    pub fn mekh(
+        &mut self,
+        shell: ptr!(Shell),
+        into_loop: ptr!(Loop),
+        into_vertex: ptr!(Vertex),
+        hole_loop: own!(Loop),
+        hole_vertex: ptr!(Vertex),
+    ) -> Result<Kemh<'brand, 'arena, V>, OperatorErr<Mekh<'brand, 'arena, V>, MekhError>> {
+        Mekh::new(shell, into_loop, into_vertex, hole_loop, hole_vertex).apply(self)
     }
 
-    pub fn all() -> Self {
-        Self {
-            twin: true,
-            next: true,
-            prev: true,
-        }
-    }
-}
-
-pub fn dcel_write_dot<V: Debug>(
-    dcel: &Dcel<V>,
-    pos: impl Fn(&V) -> [f64; 2],
-    name: impl Fn(&V, &mut Formatter) -> fmt::Result,
-    f: &mut Formatter,
-    opt: DcelDotOptions,
-) -> fmt::Result {
-    writeln!(f, "digraph DCEL {{")?;
-    writeln!(f, "node [shape = circle]")?;
-    //writeln!(f, "nodesep = 1")?;
-
-    for shell in dcel.iter_bodies().flat_map(Lens::iter_shells) {
-        for vertex in shell.iter_vertices() {
-            let p = pos(vertex.data());
-
-            writeln!(
-                f,
-                "vertex_{} [label=\"{}\", pos=\"{},{}!\"]",
-                vertex.id(),
-                DisplayFn(|f| name(vertex.data(), f)),
-                p[0],
-                p[1]
-            )?;
-        }
-
-        for hedges in shell
-            .iter_edges()
-            .map(|x| x.half_edges())
-            .flat_map(|[he1, he2]| [[he1, he2], [he2, he1]])
-        {
-            let ids = hedges.map(Lens::id);
-            let vertices = hedges.map(|h| h.origin());
-            let points = vertices.map(|v| pos(v.data()));
-
-            let mut diff = [points[1][1] - points[0][1], points[1][0] - points[0][0]];
-
-            let len = (diff[0] * diff[0] + diff[1] * diff[1]).sqrt();
-            diff[0] *= -0.075;
-            diff[1] *= 0.075;
-
-            let mid = [
-                (points[1][0] + points[0][0]) / 2.0 + diff[0],
-                (points[1][1] + points[0][1]) / 2.0 + diff[1],
-            ];
-
-            writeln!(
-                f,
-                "half_edge_{} [pos=\"{},{}!\", shape=point, width=0.01, height=0.01]",
-                ids[0], mid[0], mid[1]
-            )?;
-            writeln!(
-                f,
-                "vertex_{} -> half_edge_{} [arrowhead=none]",
-                vertices[0].id(),
-                ids[0]
-            )?;
-            writeln!(
-                f,
-                "half_edge_{} -> vertex_{} [label=\"{}\"]",
-                ids[0],
-                vertices[1].id(),
-                ids[0]
-            )?;
-
-            if opt.twin {
-                writeln!(
-                    f,
-                    "half_edge_{} -> half_edge_{} [color=\"red\"]",
-                    ids[0], ids[1]
-                )?;
-            }
-
-            if opt.next {
-                writeln!(
-                    f,
-                    "half_edge_{} -> half_edge_{} [color=\"green\"]",
-                    ids[0],
-                    hedges[0].next().id(),
-                )?;
-            }
-
-            if opt.prev {
-                writeln!(
-                    f,
-                    "half_edge_{} -> half_edge_{} [color=\"blue\"]",
-                    ids[0],
-                    hedges[0].prev().id(),
-                )?;
-            }
-        }
+    pub fn kemh(
+        &mut self,
+        shell: ptr!(Shell),
+        edge: own!(Edge),
+        loop_: ptr!(Loop),
+        hole_vertex: ptr!(Vertex),
+    ) -> Result<Mekh<'brand, 'arena, V>, OperatorErr<Kemh<'brand, 'arena, V>, KemhError>> {
+        Kemh::new(shell, edge, loop_, hole_vertex).apply(self)
     }
 
-    writeln!(f, "}}")
+    /* pub fn mekh(
+        &mut self,
+    ) -> Result<Mekh<'arena, 'brand, V>, MekhError> {
+        let face = loops[0].0.face(self);
+        assert!(loops[1].0.lens(self).face().eq(face));
+
+        let outer = loops.map(|(l, _)| face.lens(self).outer_loop().eq(l));
+        if outer[0] && outer[1] {
+            panic!("cannot connect outer loops");
+        }
+        if outer[1] {
+            loops = [loops[1], loops[0]];
+        }
+
+        let [b0, a2] = loops.map(|(l, v)| v.find_outgoing(l, self).unwrap());
+
+        let (edge, [a1, b1]) = self.new_edge(shell);
+
+        let a0 = b0.prev(self);
+        let b2 = a2.prev(self);
+
+        self.origin(loops[0].1, a1);
+        self.follow(a0, a1);
+        self.follow(a1, a2);
+
+        self.origin(loops[1].1, b1);
+        self.follow(b2, b1);
+        self.follow(b1, b0);
+
+        loops[0]
+            .0
+            .iter_mut_half_edges(self, |x, dcel| x.set_loop_(loops[0].0, dcel));
+
+        face.remove_inner_loop(loops[1].0, self);
+        from_loop.free(self);
+
+        Ok(Mekh { shell })
+    } */
 }
 
 use std::io::Write;
@@ -1492,7 +1036,9 @@ fn main() {
         // Mevvlfs(a, [w, n], l, f, s)
 
         //let op = dcel.mevvlfs(*body, [("W", [-4, 0]), ("N", [0, 4])]);
-        let op = dcel.mevvlfs(*body, [("W", [-4, 0]), ("N", [0, 4])]);
+        let op = dcel
+            .mevvlfs(*body, [("W", [-4, 0]), ("N", [0, 4])])
+            .unwrap();
         let op2 = dcel.mev(*op.shell, *op.loop_, *op.vertices[1], ("E", [4, 0]));
         let op3 = dcel.mev(*op.shell, *op.loop_, *op2.new_vertex, ("S", [0, -4]));
 
