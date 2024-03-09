@@ -85,16 +85,9 @@ fn kemh_mekh() {
 
         let mut kemh = Kemh::new(*shell, edge, *outer_loop, *inner_0);
 
-        for i in 0..10 {
-            struct State {
-                seen: u8,
-                last: Option<Vert>,
-            }
-
-            let mut st = State {
-                seen: 0,
-                last: None,
-            };
+        for _ in 0..3 {
+            let mut seen = 0;
+            let mut last = None::<Vert>;
 
             for v in outer_loop
                 .iter_half_edges(&dcel)
@@ -104,15 +97,15 @@ fn kemh_mekh() {
                 if v.is_outer() {
                     s <<= 4;
                 }
-                if st.seen & s == 0 {
-                    st.seen |= s;
+                if seen & s == 0 {
+                    seen |= s;
                 } else {
                     assert_eq!(v.either(), 0);
-                    assert_eq!(st.seen & (s << 3), 0);
-                    st.seen |= s << 3;
+                    assert_eq!(seen & (s << 3), 0);
+                    seen |= s << 3;
                 }
 
-                if let Some(last) = st.last {
+                if let Some(last) = last {
                     if v.either() == 0 {
                         assert!(
                             last == v.flip()
@@ -123,10 +116,10 @@ fn kemh_mekh() {
                     }
                 }
 
-                st.last = Some(v);
+                last = Some(v);
             }
 
-            assert_eq!(st.seen, 255);
+            assert_eq!(seen, 255);
 
             let mekh = kemh.apply(&mut dcel).unwrap();
 
@@ -142,6 +135,102 @@ fn kemh_mekh() {
             }
 
             kemh = mekh.apply(&mut dcel).unwrap();
+        }
+    })
+}
+
+#[test]
+fn msev_ksev() {
+    Dcel::<u32>::new(|mut dcel| {
+        let body = dcel.new_body();
+
+        let Kevvlfs {
+            shell,
+            loop_: mut loop_0,
+            vertices: [out_0, out_1],
+            ..
+        } = dcel.mevvlfs(*body, [0, 1]).unwrap();
+
+        let out_2 = dcel.mev(*shell, *loop_0, *out_1, 2).new_vertex;
+        let out_3 = dcel.mev(*shell, *loop_0, *out_2, 3).new_vertex;
+        dcel.melf(*shell, [*out_0, *out_3], *loop_0);
+
+        let Melf {
+            new_loop: mut loop_2,
+            edge,
+            ..
+        } = dcel.melf(*shell, [*out_0, *out_2], *loop_0);
+        if out_1.find_outgoing(*loop_0, &dcel).is_none() {
+            [loop_0, loop_2] = [loop_2, loop_0];
+        }
+
+        let in_0 = dcel.mve(*shell, *edge, 4).vertex;
+
+        let mut loop_1 = dcel.melf(*shell, [*out_1, *in_0], *loop_0).new_loop;
+        if out_0.find_outgoing(*loop_0, &dcel).is_none() {
+            [loop_0, loop_1] = [loop_1, loop_0];
+        }
+
+        let mut loop_3 = dcel.melf(*shell, [*out_3, *in_0], *loop_2).new_loop;
+        if out_2.find_outgoing(*loop_2, &dcel).is_none() {
+            [loop_2, loop_3] = [loop_3, loop_2];
+        }
+
+        fn test_integrity<'brand, 'arena>(
+            debug: &'static str,
+            dcel: &Dcel<'brand, 'arena, u32>,
+            loops: &[(ptr_t!(Loop<'brand, 'arena, u32>), &[u32])],
+        ) {
+            for (i, (l, want)) in loops.iter().enumerate() {
+                let mut got = l
+                    .iter_half_edges(dcel)
+                    .map(|x| *x.origin().data())
+                    .collect::<Vec<_>>();
+
+                assert!(
+                    (0..want.len()).any(|_| {
+                        let x = got.remove(0);
+                        got.push(x);
+                        want == &got
+                    }),
+                    "{debug} loop = {i} want = {want:?} got = {got:?}"
+                );
+            }
+        }
+
+        let mut msev = Msev::new(*shell, *in_0, [*loop_0, *loop_2], 5);
+
+        for i in 0..4 {
+            test_integrity(
+                "before msev:",
+                &dcel,
+                &[
+                    (*loop_0, &[0, 4, 1]),
+                    (*loop_1, &[1, 4, 2]),
+                    (*loop_2, &[2, 4, 3]),
+                    (*loop_3, &[3, 4, 0]),
+                ],
+            );
+
+            let mut ksev = msev.apply(&mut dcel).unwrap();
+
+            if i % 2 == 0 {
+                // ksev should be able to fix the order of the loops
+                [ksev.loops[0], ksev.loops[1]] = [ksev.loops[1], ksev.loops[0]];
+            }
+
+            test_integrity(
+                "after msev:",
+                &dcel,
+                &[
+                    (*loop_0, &[0, 4, 5, 1]),
+                    (*loop_1, &[1, 5, 2]),
+                    (*loop_2, &[2, 5, 4, 3]),
+                    (*loop_3, &[3, 4, 0]),
+                ],
+            );
+
+            msev = ksev.apply(&mut dcel).unwrap();
         }
     })
 }

@@ -39,6 +39,9 @@ pub use mevvlfs::*;
 mod mekh;
 pub use mekh::*;
 
+mod msev;
+pub use msev::*;
+
 pub trait ReflAsRef<T> {
     fn as_ref(&self) -> &T;
 }
@@ -919,7 +922,7 @@ impl<'brand, 'arena, V> Dcel<'brand, 'arena, V> {
         let [v1, v2] = old_edge.vertices(self);
 
         let mut a3 = a1.next(self);
-        let mut b3 = b2.prev(self);
+        let mut b3 = b1.prev(self);
 
         if a3.eq(b1, self) {
             a3 = b2;
@@ -936,6 +939,9 @@ impl<'brand, 'arena, V> Dcel<'brand, 'arena, V> {
         self.follow(a2, a3);
         self.follow(b3, b2);
         self.follow(b2, b1);
+
+        a2.set_loop_(a1.loop_(self), self);
+        b2.set_loop_(b1.loop_(self), self);
 
         Mve {
             shell,
@@ -966,44 +972,26 @@ impl<'brand, 'arena, V> Dcel<'brand, 'arena, V> {
         Kemh::new(shell, edge, loop_, hole_vertex).apply(self)
     }
 
-    /* pub fn mekh(
+    pub fn msev(
         &mut self,
-    ) -> Result<Mekh<'arena, 'brand, V>, MekhError> {
-        let face = loops[0].0.face(self);
-        assert!(loops[1].0.lens(self).face().eq(face));
+        shell: ptr!(Shell),
+        vertex: ptr!(Vertex),
+        loops: [ptr!(Loop); 2],
+        data: V,
+    ) -> Result<Ksev<'brand, 'arena, V>, OperatorErr<Msev<'brand, 'arena, V>, MsevError>> {
+        Msev::new(shell, vertex, loops, data).apply(self)
+    }
 
-        let outer = loops.map(|(l, _)| face.lens(self).outer_loop().eq(l));
-        if outer[0] && outer[1] {
-            panic!("cannot connect outer loops");
-        }
-        if outer[1] {
-            loops = [loops[1], loops[0]];
-        }
-
-        let [b0, a2] = loops.map(|(l, v)| v.find_outgoing(l, self).unwrap());
-
-        let (edge, [a1, b1]) = self.new_edge(shell);
-
-        let a0 = b0.prev(self);
-        let b2 = a2.prev(self);
-
-        self.origin(loops[0].1, a1);
-        self.follow(a0, a1);
-        self.follow(a1, a2);
-
-        self.origin(loops[1].1, b1);
-        self.follow(b2, b1);
-        self.follow(b1, b0);
-
-        loops[0]
-            .0
-            .iter_mut_half_edges(self, |x, dcel| x.set_loop_(loops[0].0, dcel));
-
-        face.remove_inner_loop(loops[1].0, self);
-        from_loop.free(self);
-
-        Ok(Mekh { shell })
-    } */
+    pub fn ksev(
+        &mut self,
+        shell: ptr!(Shell),
+        loops: [ptr!(Loop); 2],
+        old_vertex: ptr!(Vertex),
+        new_vertex: own!(Vertex),
+        edge: own!(Edge),
+    ) -> Result<Msev<'brand, 'arena, V>, OperatorErr<Ksev<'brand, 'arena, V>, KsevError>> {
+        Ksev::new(shell, loops, old_vertex, new_vertex, edge).apply(self)
+    }
 }
 
 use std::io::Write;
