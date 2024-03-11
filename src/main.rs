@@ -4,6 +4,7 @@ use core::ops::Deref;
 pub use ghost_cell::{GhostBorrow, GhostCell, GhostToken};
 use paste::paste;
 use std::{
+    collections::HashMap,
     convert::Infallible,
     fmt::{self, Debug, Display, Formatter},
     hash::{Hash, Hasher},
@@ -36,11 +37,23 @@ mod tests;
 mod mevvlfs;
 pub use mevvlfs::*;
 
+// mod mev;
+// pub use mev::*;
+
+// mod mve;
+// pub use mve::*;
+
+// mod melf;
+// pub use melf::*;
+
 mod mekh;
 pub use mekh::*;
 
 mod msev;
 pub use msev::*;
+
+mod mpkh;
+pub use mpkh::*;
 
 pub trait ReflAsRef<T> {
     fn as_ref(&self) -> &T;
@@ -272,6 +285,12 @@ impl<'tok, 'brand, 'arena, T: PartialEq> PartialEq for lens_t!(T) {
     }
 }
 impl<'tok, 'brand, 'arena, T: PartialEq> Eq for lens_t!(T) {}
+
+impl<'tok, 'brand, 'arena, T: Hash> Hash for lens_t!(T) {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.item.borrow(self.token).hash(state);
+    }
+}
 
 impl<'tok, 'brand, 'arena, T> ReflAsRef<GhostToken<'brand>> for lens_t!(T) {
     fn as_ref(&self) -> &GhostToken<'brand> {
@@ -991,6 +1010,22 @@ impl<'brand, 'arena, V> Dcel<'brand, 'arena, V> {
         edge: own!(Edge),
     ) -> Result<Msev<'brand, 'arena, V>, OperatorErr<Ksev<'brand, 'arena, V>, KsevError>> {
         Ksev::new(shell, loops, old_vertex, new_vertex, edge).apply(self)
+    }
+
+    pub fn mpkh(
+        &mut self,
+        loop_: ptr!(Loop),
+    ) -> Result<Kpmh<'brand, 'arena, V>, OperatorErr<Mpkh<'brand, 'arena, V>, MpkhError>> {
+        Mpkh::new(loop_).apply(self)
+    }
+
+    pub fn kpmh(
+        &mut self,
+        new_shell: Option<own!(Shell)>,
+        old_face: ptr!(Face),
+        new_face: own!(Face),
+    ) -> Result<Mpkh<'brand, 'arena, V>, OperatorErr<Kpmh<'brand, 'arena, V>, KpmhError>> {
+        Kpmh::new(new_shell, old_face, new_face).apply(self)
     }
 }
 

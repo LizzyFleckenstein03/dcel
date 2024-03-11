@@ -23,6 +23,60 @@ fn mev_cycle() {
     })
 }
 
+/*
+
+makes this shape:
+
+   O      O
+   |\    /|
+   | \__/ |
+   | O__O |
+   | /  \ |
+   |/    \|
+   O      O
+
+*/
+fn make_hourglass<'brand, 'arena, V>(
+    dcel: &mut Dcel<'brand, 'arena, V>,
+    data: [V; 6],
+) -> (own!(Shell), [own!(Loop); 3], own!(Edge), [own!(Vertex); 6]) {
+    let [d0, d1, d2, d3, d4, d5] = data;
+
+    let body = dcel.new_body();
+    let Kevvlfs {
+        shell,
+        loop_: loop_0,
+        vertices: [inner_0, inner_1],
+        ..
+    } = dcel.mevvlfs(*body, [d0, d1]).unwrap();
+
+    let inner_2 = dcel.mev(*shell, *loop_0, *inner_1, d2).new_vertex;
+    let mut outer_loop = dcel.melf(*shell, [*inner_0, *inner_2], *loop_0).new_loop;
+
+    let Mev {
+        new_vertex: outer_0,
+        edge,
+        ..
+    } = dcel.mev(*shell, *outer_loop, *inner_0, d3);
+
+    let outer_1 = dcel.mev(*shell, *outer_loop, *outer_0, d4).new_vertex;
+    let outer_2 = dcel.mev(*shell, *outer_loop, *outer_1, d5).new_vertex;
+
+    let mut loop_2 = dcel
+        .melf(*shell, [*outer_0, *outer_2], *outer_loop)
+        .new_loop;
+    if edge.lens(dcel).half_edges()[0].loop_().eq(*loop_2) {
+        [outer_loop, loop_2] = [loop_2, outer_loop];
+    }
+
+    (
+        shell,
+        [outer_loop, loop_0, loop_2],
+        edge,
+        [inner_0, inner_1, inner_2, outer_0, outer_1, outer_2],
+    )
+}
+
 #[test]
 fn kemh_mekh() {
     #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -56,33 +110,10 @@ fn kemh_mekh() {
     }
 
     Dcel::<Vert>::new(|mut dcel| {
-        let body = dcel.new_body();
-        let Kevvlfs {
-            shell,
-            loop_: loop_0,
-            vertices: [inner_0, inner_1],
-            ..
-        } = dcel.mevvlfs(*body, [Inner(0), Inner(1)]).unwrap();
-
-        let inner_2 = dcel.mev(*shell, *loop_0, *inner_1, Inner(2)).new_vertex;
-        let mut outer_loop = dcel.melf(*shell, [*inner_0, *inner_2], *loop_0).new_loop;
-
-        let Mev {
-            new_vertex: outer_0,
-            edge,
-            ..
-        } = dcel.mev(*shell, *outer_loop, *inner_0, Outer(0));
-
-        let outer_1 = dcel.mev(*shell, *outer_loop, *outer_0, Outer(1)).new_vertex;
-        let outer_2 = dcel.mev(*shell, *outer_loop, *outer_1, Outer(2)).new_vertex;
-
-        let loop_2 = dcel
-            .melf(*shell, [*outer_0, *outer_2], *outer_loop)
-            .new_loop;
-        if edge.lens(&dcel).half_edges()[0].loop_().eq(*loop_2) {
-            outer_loop = loop_2;
-        }
-
+        let (shell, [outer_loop, ..], edge, [inner_0, ..]) = make_hourglass(
+            &mut dcel,
+            [Inner(0), Inner(1), Inner(2), Outer(0), Outer(1), Outer(2)],
+        );
         let mut kemh = Kemh::new(*shell, edge, *outer_loop, *inner_0);
 
         for _ in 0..3 {
@@ -231,6 +262,65 @@ fn msev_ksev() {
             );
 
             msev = ksev.apply(&mut dcel).unwrap();
+        }
+    })
+}
+
+#[test]
+fn mpkh_kpmh() {
+    Dcel::<()>::new(|mut dcel| {
+        let (shell, [outer_0, inner_1, outer_1], edge, [vert, ..]) =
+            make_hourglass(&mut dcel, [(); 6]);
+        let inner_0 = dcel.kemh(*shell, edge, *outer_0, *vert).unwrap().hole_loop;
+
+        let mut mpkh = Mpkh::new(*inner_0);
+
+        for _ in 0..4 {
+            use std::collections::HashSet;
+
+            {
+                mklens!(&dcel, shell, outer_0, outer_1, inner_0, inner_1);
+
+                assert_eq!(
+                    shell.iter_faces().collect::<HashSet<_>>(),
+                    HashSet::from([outer_0, outer_1, inner_0, inner_1].map(Lens::face))
+                );
+
+                assert_eq!(outer_0.face(), inner_0.face());
+                assert_eq!(outer_0.face().outer_loop(), outer_0);
+                assert_eq!(outer_0.face().inner_loops(), inner_0);
+                assert_eq!(inner_0.next(), inner_0);
+            }
+
+            let kpmh = mpkh.apply(&mut dcel).unwrap();
+
+            {
+                let new_face = &kpmh.new_face;
+                let new_shell = kpmh.new_shell.as_ref().unwrap();
+
+                mklens!(&dcel, shell, new_shell, new_face, outer_0, outer_1, inner_0, inner_1);
+
+                assert_eq!(new_face, inner_0.face());
+                assert_eq!(new_face.outer_loop(), inner_0);
+                assert!(new_face.iter_inner_loops().next().is_none());
+
+                assert_eq!(
+                    shell.body().iter_shells().collect::<HashSet<_>>(),
+                    HashSet::from([new_shell, shell])
+                );
+
+                assert_eq!(
+                    shell.iter_faces().collect::<HashSet<_>>(),
+                    HashSet::from([outer_0.face(), outer_1.face()])
+                );
+
+                assert_eq!(
+                    new_shell.iter_faces().collect::<HashSet<_>>(),
+                    HashSet::from([inner_0.face(), inner_1.face()])
+                );
+            }
+
+            mpkh = kpmh.apply(&mut dcel).unwrap();
         }
     })
 }

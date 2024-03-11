@@ -174,8 +174,9 @@ macro_rules! entity {
 
 						let last = item;
 						while {
+							let next_item = item.next(token);
 							f(item, token);
-							item = item.next(token);
+							item = next_item;
 							!item.eq(last, token)
 						} {}
 					}
