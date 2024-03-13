@@ -37,8 +37,8 @@ mod tests;
 mod mevvlfs;
 pub use mevvlfs::*;
 
-// mod mev;
-// pub use mev::*;
+mod mev;
+pub use mev::*;
 
 // mod mve;
 // pub use mve::*;
@@ -635,14 +635,6 @@ pub struct Melf<'brand, 'arena, V> {
     pub face: own!(Face),
 }
 
-pub struct Mev<'brand, 'arena, V> {
-    pub shell: ptr!(Shell),
-    pub loop_: ptr!(Loop),
-    pub old_vertex: ptr!(Vertex),
-    pub new_vertex: own!(Vertex),
-    pub edge: own!(Edge),
-}
-
 pub struct Mve<'brand, 'arena, V> {
     pub shell: ptr!(Shell),
     pub old_edge: ptr!(Edge),
@@ -796,7 +788,6 @@ impl<'brand, 'arena, V> Dcel<'brand, 'arena, V> {
 
     pub fn kevvlfs(
         &mut self,
-        body: ptr!(Body),
         edge: own!(Edge),
         vertices: [own!(Vertex); 2],
         loop_: own!(Loop),
@@ -804,51 +795,24 @@ impl<'brand, 'arena, V> Dcel<'brand, 'arena, V> {
         shell: own!(Shell),
     ) -> Result<Mevvlfs<'brand, 'arena, V>, OperatorErr<Kevvlfs<'brand, 'arena, V>, KevvlfsError>>
     {
-        Kevvlfs::new(body, edge, vertices, loop_, face, shell).apply(self)
+        Kevvlfs::new(edge, vertices, loop_, face, shell).apply(self)
     }
 
     pub fn mev(
         &mut self,
-        shell: ptr!(Shell),
         loop_: ptr!(Loop),
-        old_vertex: ptr!(Vertex),
+        vertex: ptr!(Vertex),
         data: V,
-    ) -> Mev<'brand, 'arena, V> {
-        //
-        //      o
-        //  a /   \ d
-        //   <     <
-        //
+    ) -> Result<Kev<'brand, 'arena, V>, OperatorErr<Mev<'brand, 'arena, V>, MevError>> {
+        Mev::new(loop_, vertex, data).apply(self)
+    }
 
-        //    < n <
-        //  b |   | c
-        //      o
-        //  a /   \ d
-        //   <     <
-
-        let (edge, [b, c]) = Edge::create(shell, self);
-        let new_vertex = shell.add_new_vertex(data, self);
-
-        let a = old_vertex.find_outgoing(loop_, self).unwrap();
-        let d = a.prev(self);
-
-        self.follow(d, c);
-        self.follow(c, b);
-        self.follow(b, a);
-
-        b.set_loop_(loop_, self);
-        c.set_loop_(loop_, self);
-
-        b.update_origin(*new_vertex, self);
-        c.update_origin(old_vertex, self);
-
-        Mev {
-            shell,
-            loop_,
-            old_vertex,
-            new_vertex,
-            edge,
-        }
+    pub fn kev(
+        &mut self,
+        edge: own!(Edge),
+        vertex: own!(Vertex),
+    ) -> Result<Mev<'brand, 'arena, V>, OperatorErr<Kev<'brand, 'arena, V>, KevError>> {
+        Kev::new(edge, vertex).apply(self)
     }
 
     pub fn melf(
@@ -1062,11 +1026,11 @@ fn main() {
         let op = dcel
             .mevvlfs(*body, [("W", [-4, 0]), ("N", [0, 4])])
             .unwrap();
-        let op2 = dcel.mev(*op.shell, *op.loop_, *op.vertices[1], ("E", [4, 0]));
-        let op3 = dcel.mev(*op.shell, *op.loop_, *op2.new_vertex, ("S", [0, -4]));
+        let op2 = dcel.mev(*op.loop_, *op.vertices[1], ("E", [4, 0])).unwrap();
+        let op3 = dcel.mev(*op.loop_, *op2.vertex, ("S", [0, -4])).unwrap();
 
-        dcel.melf(*op.shell, [*op3.new_vertex, *op.vertices[0]], *op.loop_);
-        dcel.melf(*op.shell, [*op.vertices[0], *op2.new_vertex], *op.loop_);
+        dcel.melf(*op.shell, [*op3.vertex, *op.vertices[0]], *op.loop_);
+        dcel.melf(*op.shell, [*op.vertices[0], *op2.vertex], *op.loop_);
 
         show("cool_stuff.dot", &dcel);
 

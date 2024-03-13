@@ -3,8 +3,8 @@ use crate::*;
 // Make Edge-Vertex-Vertex-Loop-Face-Shell
 
 pub struct Mevvlfs<'brand, 'arena, V> {
-    body: ptr!(Body),
-    data: [V; 2],
+    pub body: ptr!(Body),
+    pub data: [V; 2],
 }
 
 impl<'brand, 'arena, V> Mevvlfs<'brand, 'arena, V> {
@@ -50,7 +50,6 @@ impl<'brand, 'arena, V> Operator<'brand, 'arena, V> for Mevvlfs<'brand, 'arena, 
         loop_.add_half_edge(b, dcel);
 
         Ok(Kevvlfs {
-            body,
             edge,
             vertices: [v1, v2],
             loop_,
@@ -61,7 +60,6 @@ impl<'brand, 'arena, V> Operator<'brand, 'arena, V> for Mevvlfs<'brand, 'arena, 
 }
 
 pub struct Kevvlfs<'brand, 'arena, V> {
-    pub body: ptr!(Body),
     pub edge: own!(Edge),
     pub vertices: [own!(Vertex); 2],
     pub loop_: own!(Loop),
@@ -85,13 +83,10 @@ pub enum KevvlfsError {
     ShellHasMoreThanOneFace,
     #[error("shell face does not match face")]
     ShellFaceMismatch,
-    #[error("shell body does not match body")]
-    ShellBodyMismatch,
 }
 
 impl<'brand, 'arena, V> Kevvlfs<'brand, 'arena, V> {
     pub fn new(
-        body: ptr!(Body),
         edge: own!(Edge),
         vertices: [own!(Vertex); 2],
         loop_: own!(Loop),
@@ -99,7 +94,6 @@ impl<'brand, 'arena, V> Kevvlfs<'brand, 'arena, V> {
         shell: own!(Shell),
     ) -> Self {
         Self {
-            body,
             edge,
             vertices,
             loop_,
@@ -116,7 +110,6 @@ impl<'brand, 'arena, V> Operator<'brand, 'arena, V> for Kevvlfs<'brand, 'arena, 
 
     fn check(&self, dcel: &Dcel<'brand, 'arena, V>) -> Result<Self::Check, Self::Error> {
         let Kevvlfs {
-            body,
             edge,
             vertices: [v1, v2],
             loop_,
@@ -124,7 +117,7 @@ impl<'brand, 'arena, V> Operator<'brand, 'arena, V> for Kevvlfs<'brand, 'arena, 
             shell,
         } = self;
 
-        mklens!(dcel, edge, loop_, face, shell, body, v1, v2);
+        mklens!(dcel, edge, loop_, face, shell, v1, v2);
 
         let [a, b] = edge.half_edges();
         let edge_verts = edge.vertices();
@@ -149,7 +142,6 @@ impl<'brand, 'arena, V> Operator<'brand, 'arena, V> for Kevvlfs<'brand, 'arena, 
 
         or_err(face.next() == face, KevvlfsError::ShellHasMoreThanOneFace)?;
         or_err(shell.faces() == face, KevvlfsError::ShellFaceMismatch)?;
-        or_err(shell.body() == body, KevvlfsError::ShellBodyMismatch)?;
 
         Ok(())
     }
@@ -161,7 +153,6 @@ impl<'brand, 'arena, V> Operator<'brand, 'arena, V> for Kevvlfs<'brand, 'arena, 
         try_check!(self, dcel);
 
         let Kevvlfs {
-            body,
             edge,
             vertices,
             loop_,
@@ -169,6 +160,7 @@ impl<'brand, 'arena, V> Operator<'brand, 'arena, V> for Kevvlfs<'brand, 'arena, 
             shell,
         } = self;
 
+        let body = shell.body(dcel);
         body.remove_shell(*shell, dcel);
 
         edge.destroy(dcel);

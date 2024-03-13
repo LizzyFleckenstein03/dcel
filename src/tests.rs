@@ -5,9 +5,9 @@ fn mev_cycle() {
     Dcel::<u32>::new(|mut dcel| {
         let body = dcel.new_body();
         let op = dcel.mevvlfs(*body, [0, 1]).unwrap();
-        let op2 = dcel.mev(*op.shell, *op.loop_, *op.vertices[1], 2);
-        let op3 = dcel.mev(*op.shell, *op.loop_, *op2.new_vertex, 3);
-        dcel.melf(*op.shell, [*op3.new_vertex, *op.vertices[0]], *op.loop_);
+        let op2 = dcel.mev(*op.loop_, *op.vertices[1], 2).unwrap();
+        let op3 = dcel.mev(*op.loop_, *op2.vertex, 3).unwrap();
+        dcel.melf(*op.shell, [*op3.vertex, *op.vertices[0]], *op.loop_);
 
         let mut vertices = op
             .loop_
@@ -50,17 +50,16 @@ fn make_hourglass<'brand, 'arena, V>(
         ..
     } = dcel.mevvlfs(*body, [d0, d1]).unwrap();
 
-    let inner_2 = dcel.mev(*shell, *loop_0, *inner_1, d2).new_vertex;
+    let inner_2 = dcel.mev(*loop_0, *inner_1, d2).unwrap().vertex;
     let mut outer_loop = dcel.melf(*shell, [*inner_0, *inner_2], *loop_0).new_loop;
 
-    let Mev {
-        new_vertex: outer_0,
+    let Kev {
+        vertex: outer_0,
         edge,
-        ..
-    } = dcel.mev(*shell, *outer_loop, *inner_0, d3);
+    } = dcel.mev(*outer_loop, *inner_0, d3).unwrap();
 
-    let outer_1 = dcel.mev(*shell, *outer_loop, *outer_0, d4).new_vertex;
-    let outer_2 = dcel.mev(*shell, *outer_loop, *outer_1, d5).new_vertex;
+    let outer_1 = dcel.mev(*outer_loop, *outer_0, d4).unwrap().vertex;
+    let outer_2 = dcel.mev(*outer_loop, *outer_1, d5).unwrap().vertex;
 
     let mut loop_2 = dcel
         .melf(*shell, [*outer_0, *outer_2], *outer_loop)
@@ -182,8 +181,8 @@ fn msev_ksev() {
             ..
         } = dcel.mevvlfs(*body, [0, 1]).unwrap();
 
-        let out_2 = dcel.mev(*shell, *loop_0, *out_1, 2).new_vertex;
-        let out_3 = dcel.mev(*shell, *loop_0, *out_2, 3).new_vertex;
+        let out_2 = dcel.mev(*loop_0, *out_1, 2).unwrap().vertex;
+        let out_3 = dcel.mev(*loop_0, *out_2, 3).unwrap().vertex;
         dcel.melf(*shell, [*out_0, *out_3], *loop_0);
 
         let Melf {
