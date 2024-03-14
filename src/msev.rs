@@ -173,6 +173,9 @@ impl<'brand, 'arena, V> Operator<'brand, 'arena, V> for Ksev<'brand, 'arena, V> 
         loops[0].set_half_edges(a0, dcel);
         loops[1].set_half_edges(b0, dcel);
 
+        shell.remove_edge(*edge, dcel);
+        shell.remove_vertex(*new_vertex, dcel);
+
         edge.destroy(dcel);
         let data = new_vertex.destroy(dcel);
 

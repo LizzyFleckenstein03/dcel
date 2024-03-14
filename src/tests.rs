@@ -1,4 +1,5 @@
 use crate::*;
+use std::collections::HashSet;
 
 #[test]
 fn mev_cycle() {
@@ -7,7 +8,8 @@ fn mev_cycle() {
         let op = dcel.mevvlfs(*body, [0, 1]).unwrap();
         let op2 = dcel.mev(*op.loop_, *op.vertices[1], 2).unwrap();
         let op3 = dcel.mev(*op.loop_, *op2.vertex, 3).unwrap();
-        dcel.melf(*op.shell, [*op3.vertex, *op.vertices[0]], *op.loop_);
+        dcel.melf([*op3.vertex, *op.vertices[0]], *op.loop_)
+            .unwrap();
 
         let mut vertices = op
             .loop_
@@ -20,6 +22,71 @@ fn mev_cycle() {
             .skip(*vertices.peek().unwrap() as _)
             .take(4)
             .eq(vertices));
+    })
+}
+
+fn assert_verts<'brand, 'arena, V: Eq + Copy + Debug + Hash>(
+    loop_: ptr!(Loop),
+    dcel: &Dcel<'brand, 'arena, V>,
+    want: impl Into<HashSet<V>>,
+) {
+    assert_eq!(
+        loop_
+            .iter_half_edges(dcel)
+            .map(|x| *x.origin().data())
+            .collect::<HashSet<_>>(),
+        want.into()
+    );
+}
+
+#[test]
+fn mev_kve() {
+    Dcel::<u32>::new(|mut dcel| {
+        let body = dcel.new_body();
+        let Kevvlfs {
+            vertices: [v0, v1],
+            edge: old_edge,
+            loop_,
+            ..
+        } = dcel.mevvlfs(*body, [0, 1]).unwrap();
+        assert_verts(*loop_, &dcel, [0, 1]);
+
+        dcel.mev(*loop_, *v1, 2).unwrap();
+        assert_verts(*loop_, &dcel, [0, 1, 2]);
+
+        let undo = dcel.kve(old_edge, v1).unwrap();
+        assert_verts(*loop_, &dcel, [0, 2]);
+
+        undo.apply(&mut dcel).unwrap();
+        assert_verts(*loop_, &dcel, [0, 1, 2]);
+    })
+}
+
+#[test]
+fn mve_kev() {
+    Dcel::<u32>::new(|mut dcel| {
+        let body = dcel.new_body();
+        let Kevvlfs {
+            vertices: [v0, v1],
+            edge: old_edge,
+            loop_,
+            ..
+        } = dcel.mevvlfs(*body, [0, 1]).unwrap();
+        assert_verts(*loop_, &dcel, [0, 1]);
+
+        let mut edge = dcel.mve(*old_edge, 2).unwrap().edge;
+        assert_verts(*loop_, &dcel, [0, 2, 1]);
+
+        let verts = edge.lens(&dcel).vertices();
+        if !verts[0].eq(*v1) && !verts[1].eq(*v1) {
+            edge = old_edge;
+        }
+
+        let undo = dcel.kev(edge, v1).unwrap();
+        assert_verts(*loop_, &dcel, [0, 2]);
+
+        undo.apply(&mut dcel).unwrap();
+        assert_verts(*loop_, &dcel, [0, 2, 1]);
     })
 }
 
@@ -51,7 +118,7 @@ fn make_hourglass<'brand, 'arena, V>(
     } = dcel.mevvlfs(*body, [d0, d1]).unwrap();
 
     let inner_2 = dcel.mev(*loop_0, *inner_1, d2).unwrap().vertex;
-    let mut outer_loop = dcel.melf(*shell, [*inner_0, *inner_2], *loop_0).new_loop;
+    let mut outer_loop = dcel.melf([*inner_0, *inner_2], *loop_0).unwrap().loop_;
 
     let Kev {
         vertex: outer_0,
@@ -61,9 +128,7 @@ fn make_hourglass<'brand, 'arena, V>(
     let outer_1 = dcel.mev(*outer_loop, *outer_0, d4).unwrap().vertex;
     let outer_2 = dcel.mev(*outer_loop, *outer_1, d5).unwrap().vertex;
 
-    let mut loop_2 = dcel
-        .melf(*shell, [*outer_0, *outer_2], *outer_loop)
-        .new_loop;
+    let mut loop_2 = dcel.melf([*outer_0, *outer_2], *outer_loop).unwrap().loop_;
     if edge.lens(dcel).half_edges()[0].loop_().eq(*loop_2) {
         [outer_loop, loop_2] = [loop_2, outer_loop];
     }
@@ -183,25 +248,25 @@ fn msev_ksev() {
 
         let out_2 = dcel.mev(*loop_0, *out_1, 2).unwrap().vertex;
         let out_3 = dcel.mev(*loop_0, *out_2, 3).unwrap().vertex;
-        dcel.melf(*shell, [*out_0, *out_3], *loop_0);
+        dcel.melf([*out_0, *out_3], *loop_0).unwrap();
 
-        let Melf {
-            new_loop: mut loop_2,
+        let Kelf {
+            loop_: mut loop_2,
             edge,
             ..
-        } = dcel.melf(*shell, [*out_0, *out_2], *loop_0);
+        } = dcel.melf([*out_0, *out_2], *loop_0).unwrap();
         if out_1.find_outgoing(*loop_0, &dcel).is_none() {
             [loop_0, loop_2] = [loop_2, loop_0];
         }
 
-        let in_0 = dcel.mve(*shell, *edge, 4).vertex;
+        let in_0 = dcel.mve(*edge, 4).unwrap().vertex;
 
-        let mut loop_1 = dcel.melf(*shell, [*out_1, *in_0], *loop_0).new_loop;
+        let mut loop_1 = dcel.melf([*out_1, *in_0], *loop_0).unwrap().loop_;
         if out_0.find_outgoing(*loop_0, &dcel).is_none() {
             [loop_0, loop_1] = [loop_1, loop_0];
         }
 
-        let mut loop_3 = dcel.melf(*shell, [*out_3, *in_0], *loop_2).new_loop;
+        let mut loop_3 = dcel.melf([*out_3, *in_0], *loop_2).unwrap().loop_;
         if out_2.find_outgoing(*loop_2, &dcel).is_none() {
             [loop_2, loop_3] = [loop_3, loop_2];
         }

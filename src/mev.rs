@@ -128,6 +128,10 @@ impl<'brand, 'arena, V> Operator<'brand, 'arena, V> for Kev<'brand, 'arena, V> {
         let d = c.prev(dcel);
         dcel.follow(d, a);
 
+        let shell = a.loop_(dcel).face(dcel).shell(dcel);
+        shell.remove_edge(*self.edge, dcel);
+        shell.remove_vertex(*self.vertex, dcel);
+
         self.edge.destroy(dcel);
         let data = self.vertex.destroy(dcel);
 
