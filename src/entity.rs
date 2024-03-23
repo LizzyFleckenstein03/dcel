@@ -172,12 +172,12 @@ macro_rules! entity {
 							return;
 						};
 
-						let last = item;
+						let last = item.id(token);
 						while {
 							let next_item = item.next(token);
 							f(item, token);
 							item = next_item;
-							!item.eq(last, token)
+							matches!(item.maybe_id(token), Some(x) if x != last)
 						} {}
 					}
 

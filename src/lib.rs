@@ -31,6 +31,21 @@ pub use entity_iterator::*;
 mod dot;
 pub use dot::*;
 
+#[cfg(feature = "img")]
+mod img;
+
+#[cfg(feature = "img")]
+pub use img::*;
+
+mod obj_export;
+pub use obj_export::*;
+
+#[cfg(feature = "obj_import")]
+mod obj_import;
+
+#[cfg(feature = "obj_import")]
+pub use obj_import::*;
+
 #[cfg(test)]
 mod tests;
 
@@ -136,7 +151,7 @@ macro_rules! mklens {
 	};
 }
 
-fn _short_debug(ty: &'static str, id: usize, f: &mut Formatter) -> fmt::Result {
+fn short_debug_(ty: &'static str, id: usize, f: &mut Formatter) -> fmt::Result {
     f.debug_tuple(ty).field(&id).finish()
 }
 
@@ -144,12 +159,12 @@ fn short_debug<'tok, 'brand, 'arena, T: Entity<'brand, 'arena>>(
     x: lens_t!(T),
     f: &mut Formatter,
 ) -> fmt::Result {
-    _short_debug(T::type_name(), x.id(), f)
+    short_debug_(T::type_name(), x.id(), f)
 }
 
 fn short_debug_fn<'tok, 'brand, 'arena, T: Entity<'brand, 'arena>>(x: lens_t!(T)) -> impl Debug {
     let id = x.id();
-    DisplayFn(move |f| _short_debug(T::type_name(), id, f))
+    DisplayFn(move |f| short_debug_(T::type_name(), id, f))
 }
 
 fn short_debug_list<'tok, 'brand, 'arena, T, I>(iter: I, f: &mut Formatter) -> fmt::Result
@@ -498,7 +513,7 @@ impl<'tok, 'brand, 'arena, V> lens!(Loop) {
 }
 
 entity!(edge: Edge,
-    half_edges: Option<[own!(HalfEdge); 2]> = None
+    half_edges: [Option<own!(HalfEdge)>; 2] = [None, None]
 );
 
 impl<'brand, 'arena, V> Edge<'brand, 'arena, V> {
@@ -514,7 +529,7 @@ impl<'brand, 'arena, V> Edge<'brand, 'arena, V> {
         let he1 = *he1_own;
         let he2 = *he2_own;
 
-        edge.borrow_mut(dcel).half_edges = Some([he1_own, he2_own]);
+        edge.borrow_mut(dcel).half_edges = [Some(he1_own), Some(he2_own)];
         // edge.set_half_edges([he1_own, he2_own], dcel);
 
         he1.set_twin(he2, dcel);
@@ -528,17 +543,26 @@ impl<'brand, 'arena, V> Edge<'brand, 'arena, V> {
 
 impl<'brand, 'arena, V> own!(Edge) {
     fn destroy(self, dcel: &mut Dcel<'brand, 'arena, V>) {
-        let [a, b] = self.borrow_mut(dcel).half_edges.take().unwrap();
+        for x in self
+            .borrow_mut(dcel)
+            .half_edges
+            .each_mut()
+            .map(Option::take)
+            .into_iter()
+            .flatten()
+        {
+            x.free(dcel);
+        }
         self.free(dcel);
-        a.free(dcel);
-        b.free(dcel);
     }
 }
 
 impl<'brand, 'arena, V> ptr!(Edge) {
     pub fn half_edges(self, token: &impl ReflAsRef<GhostToken<'brand>>) -> [ptr!(HalfEdge); 2] {
-        let he = self.borrow(token).half_edges.as_ref().unwrap();
-        [*he[0], *he[1]]
+        self.borrow(token)
+            .half_edges
+            .each_ref()
+            .map(|x| *x.as_deref().unwrap())
     }
 
     pub fn vertices(self, token: &impl ReflAsRef<GhostToken<'brand>>) -> [ptr!(Vertex); 2] {
@@ -578,6 +602,16 @@ entity!(face: Face;
     pub shell: Shell
 );
 
+impl<'brand, 'arena, V> own!(Face) {
+    fn destroy(self, dcel: &mut Dcel<'brand, 'arena, V>) {
+        Own::unsafe_make_owned(self.outer_loop(dcel)).free(dcel);
+        self.iter_mut_inner_loops(dcel, |x, dcel| {
+            Own::unsafe_make_owned(x).free(dcel);
+        });
+        self.free(dcel);
+    }
+}
+
 entity!(shell: Shell;
     faces[face: face back]: Face,
     edges[edge: edge]: Edge,
@@ -585,9 +619,33 @@ entity!(shell: Shell;
     pub body: Body
 );
 
+impl<'brand, 'arena, V> own!(Shell) {
+    fn destroy(self, dcel: &mut Dcel<'brand, 'arena, V>) {
+        self.iter_mut_faces(dcel, |x, dcel| {
+            Own::unsafe_make_owned(x).destroy(dcel);
+        });
+        self.iter_mut_edges(dcel, |x, dcel| {
+            Own::unsafe_make_owned(x).destroy(dcel);
+        });
+        self.iter_mut_vertices(dcel, |x, dcel| {
+            Own::unsafe_make_owned(x).destroy(dcel);
+        });
+        self.free(dcel);
+    }
+}
+
 entity!(body: Body;
     shells[shell: shell back]: Shell
 );
+
+impl<'brand, 'arena, V> own!(Body) {
+    fn destroy(self, dcel: &mut Dcel<'brand, 'arena, V>) {
+        self.iter_mut_shells(dcel, |x, dcel| {
+            Own::unsafe_make_owned(x).destroy(dcel);
+        });
+        dcel.delete_body(self);
+    }
+}
 
 struct Allocator<'brand, 'arena, T: Entity<'brand, 'arena>> {
     next_id: usize,
@@ -650,7 +708,7 @@ impl<T, E: Display> Display for OperatorErr<T, E> {
 }
 
 pub trait Operator<'brand, 'arena, V>: Sized {
-    type Inverse; //: Operator<'brand, 'arena, V>;
+    type Inverse: Operator<'brand, 'arena, V>;
     type Error: std::error::Error;
     type Check;
 
@@ -725,9 +783,9 @@ impl<'brand, 'arena, V> Dcel<'brand, 'arena, V> {
         }
     }
 
-    pub fn new<R, F, W>(fun: F) -> R
+    pub fn new<R, F>(fun: F) -> R
     where
-        for<'new_brand, 'new_arena> F: FnOnce(Dcel<'new_brand, 'new_arena, W>) -> R,
+        for<'new_brand, 'new_arena> F: FnOnce(Dcel<'new_brand, 'new_arena, V>) -> R,
     {
         GhostToken::new(|token| {
             let arena = DcelArena::default();
@@ -893,7 +951,7 @@ impl<'brand, 'arena, V> Dcel<'brand, 'arena, V> {
 
 use std::io::Write;
 
-fn main() {
+fn _main() {
     let show = |name, dcel: &Dcel<(&'static str, [i64; 2])>| {
         write!(
             &mut std::fs::File::create(name).unwrap(),
