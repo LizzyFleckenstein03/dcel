@@ -4,7 +4,7 @@ pub struct EntityIterator<'tok, 'brand, 'arena, T>(Option<(lens_t!(T), lens_t!(T
 
 impl<'tok, 'brand, 'arena, T> Clone for EntityIterator<'tok, 'brand, 'arena, T> {
     fn clone(&self) -> Self {
-        Self(self.0)
+        *self
     }
 }
 

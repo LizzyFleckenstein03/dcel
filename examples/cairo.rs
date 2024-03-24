@@ -1,6 +1,5 @@
 use cairo::{Context, SvgSurface};
 use dcel::Dcel;
-use enumset::EnumSet;
 use std::borrow::Cow;
 
 fn main() {
@@ -17,7 +16,6 @@ fn main() {
         dcel::write_img(
             &dcel,
             &ctx,
-            EnumSet::all(),
             |v| {
                 [
                     v.1[0] as f64 * width / 3.0 + width / 2.0,

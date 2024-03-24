@@ -4,16 +4,16 @@ use obj::raw::object::RawObj;
 
 #[derive(Debug, Error)]
 pub enum ObjImportError {
-    #[error("vertex position index out of bounds")]
-    InvalidPositionIndex,
+    #[error("vertex {0} position index out of bounds")]
+    InvalidPositionIndex(usize),
     #[error("half-edge between vertices {0} and {1} appears twice")]
     SameHalfEdge(usize, usize),
     #[error("half-edge between vertices {0} and {1} does not have a twin")]
     UnclaimedHalfEdge(usize, usize),
     #[error("empty face")]
     EmptyFace,
-    #[error("vertex is not connected to any edges")]
-    StandaloneVertex,
+    #[error("vertex {0} is not connected to any edges")]
+    StandaloneVertex(usize),
 }
 
 use ObjImportError::*;
@@ -95,9 +95,7 @@ impl<'tok, 'brand, 'arena, V> ObjImport<'tok, 'brand, 'arena, V> {
         }
     }
 
-    fn iter_polygon(
-        p: &obj::raw::object::Polygon,
-    ) -> impl Iterator<Item = usize> + DoubleEndedIterator + '_ {
+    fn iter_polygon(p: &obj::raw::object::Polygon) -> impl DoubleEndedIterator<Item = usize> + '_ {
         use either::{Left, Right};
         use obj::raw::object::Polygon::*;
 
@@ -122,12 +120,13 @@ impl<'tok, 'brand, 'arena, V> ObjImport<'tok, 'brand, 'arena, V> {
 
         if let Some((k, _)) = self.half_edges.iter().find(|(_, v)| v.is_some()) {
             Err(UnclaimedHalfEdge(k.1 + 1, k.0 + 1))
-        } else if self
+        } else if let Some((i, _)) = self
             .vertices
             .iter()
-            .any(|x| x.maybe_outgoing(self.dcel).is_none())
+            .enumerate()
+            .find(|(_, x)| x.maybe_outgoing(self.dcel).is_none())
         {
-            Err(StandaloneVertex)
+            Err(StandaloneVertex(i + 1))
         } else {
             Ok(())
         }
@@ -142,7 +141,7 @@ impl<'tok, 'brand, 'arena, V> ObjImport<'tok, 'brand, 'arena, V> {
         use std::collections::hash_map::Entry::*;
 
         let [a, b] = vertices;
-        let v = *self.vertices.get(a).ok_or(InvalidPositionIndex)?;
+        let v = *self.vertices.get(a).ok_or(InvalidPositionIndex(a + 1))?;
 
         let he = match self.half_edges.entry((a, b)) {
             Occupied(mut e) => e.get_mut().take().ok_or(SameHalfEdge(a + 1, b + 1))?,

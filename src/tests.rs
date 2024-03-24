@@ -44,7 +44,7 @@ fn mev_kve() {
     Dcel::<u32>::new(|mut dcel| {
         let body = dcel.new_body();
         let Kevvlfs {
-            vertices: [v0, v1],
+            vertices: [_v0, v1],
             edge: old_edge,
             loop_,
             ..
@@ -67,7 +67,7 @@ fn mve_kev() {
     Dcel::<u32>::new(|mut dcel| {
         let body = dcel.new_body();
         let Kevvlfs {
-            vertices: [v0, v1],
+            vertices: [_v0, v1],
             edge: old_edge,
             loop_,
             ..

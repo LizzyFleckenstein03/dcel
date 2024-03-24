@@ -5,7 +5,7 @@ edition = "2021"
 license = "MIT"
 
 [features]
-test = ["obj_import", "img", "cairo-rs/svg", "cairo-rs/png"]
+test = ["obj_import", "img", "cairo-rs/svg"]
 img = ["dep:cairo-rs", "dep:enumset"]
 obj_import = ["dep:obj-rs", "dep:either"]
 

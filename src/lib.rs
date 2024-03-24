@@ -1,7 +1,11 @@
 #![allow(private_bounds)]
+#![allow(clippy::type_complexity)]
+
+pub use ghost_cell;
+pub use typed_arena;
 
 use core::ops::Deref;
-pub use ghost_cell::{GhostBorrow, GhostCell, GhostToken};
+use ghost_cell::{GhostCell, GhostToken};
 use paste::paste;
 use std::{
     collections::HashMap,
@@ -10,7 +14,7 @@ use std::{
     hash::{Hash, Hasher},
 };
 use thiserror::Error;
-pub use typed_arena::Arena;
+use typed_arena::Arena;
 
 macro_rules! try_check {
     ($this:ident, $dcel:ident) => {
@@ -27,9 +31,6 @@ use entity::*;
 
 mod entity_iterator;
 pub use entity_iterator::*;
-
-mod dot;
-pub use dot::*;
 
 #[cfg(feature = "img")]
 mod img;
@@ -190,7 +191,7 @@ pub struct Ptr<'brand, 'arena, T>(pub &'arena GhostCell<'brand, T>);
 
 impl<'brand, 'arena, T> Clone for ptr_t!(T) {
     fn clone(&self) -> Self {
-        Self(self.0)
+        *self
     }
 }
 impl<'brand, 'arena, T> Copy for ptr_t!(T) {}
@@ -291,7 +292,7 @@ pub struct Lens<'tok, 'brand, 'arena, T> {
 
 impl<'tok, 'brand, 'arena, T> Clone for lens_t!(T) {
     fn clone(&self) -> Self {
-        Self::new(self.item, self.token)
+        *self
     }
 }
 impl<'tok, 'brand, 'arena, T> Copy for lens_t!(T) {}
@@ -311,7 +312,7 @@ impl<'tok, 'brand, 'arena, T: Hash> Hash for lens_t!(T) {
 
 impl<'tok, 'brand, 'arena, T> ReflAsRef<GhostToken<'brand>> for lens_t!(T) {
     fn as_ref(&self) -> &GhostToken<'brand> {
-        &self.token
+        self.token
     }
 }
 
@@ -370,7 +371,7 @@ pub struct OutgoingIterator<'tok, 'brand, 'arena, V>(Option<(lens!(HalfEdge), le
 
 impl<'tok, 'brand, 'arena, V> Clone for OutgoingIterator<'tok, 'brand, 'arena, V> {
     fn clone(&self) -> Self {
-        Self(self.0)
+        *self
     }
 }
 
@@ -785,6 +786,7 @@ impl<'brand, 'arena, V> Dcel<'brand, 'arena, V> {
         }
     }
 
+    #[allow(clippy::new_ret_no_self)]
     pub fn new<R, F>(fun: F) -> R
     where
         for<'new_brand, 'new_arena> F: FnOnce(Dcel<'new_brand, 'new_arena, V>) -> R,

@@ -1,30 +1,17 @@
 use crate::*;
 
 pub use cairo;
-pub use enumset::{self, EnumSet};
 
-use cairo::{Context, Surface};
-use enumset::EnumSetType;
+use cairo::Context;
 use std::borrow::{Borrow, Cow};
-
-#[derive(EnumSetType, Debug)]
-pub enum ImgOption {
-    Twin,
-    Next,
-    Prev,
-    EdgeIds,
-}
 
 pub fn write_img<V>(
     dcel: &Dcel<V>,
     ctx: &Context,
-    opt: EnumSet<ImgOption>,
     pos: impl Fn(&V) -> [f64; 2],
     label: impl Fn(&V) -> Cow<str>,
     font_size: f64,
 ) -> Result<(), cairo::Error> {
-    // let (_, _, width, height) = ctx.clip_extents()?;
-
     ctx.set_font_size(font_size);
     for shell in dcel.iter_bodies().flat_map(Lens::iter_shells) {
         for hedges in shell
@@ -62,67 +49,18 @@ pub fn write_img<V>(
             ctx.close_path();
             ctx.fill()?;
 
-            if opt.contains(ImgOption::EdgeIds) {
-                //arrow[0]
+            // edge ids
+            let num_pos = [arrow[0] + prp[0] * 4.0, arrow[1] + prp[1] * 4.0];
+            let num_text = hedges[0].id().to_string();
 
-                let num_pos = [arrow[0] + prp[0] * 4.0, arrow[1] + prp[1] * 4.0];
-                let num_text = hedges[0].id().to_string();
-
-                ctx.set_font_size(font_size / 2.0);
-                let ext = ctx.text_extents(&num_text)?;
-                ctx.move_to(
-                    num_pos[0] - ext.x_advance() / 2.0,
-                    num_pos[1] - ext.y_bearing() - ext.height() / 2.0,
-                );
-                ctx.show_text(&num_text)?;
-                ctx.set_font_size(font_size);
-            }
-
-            /*
-            writeln!(
-                f,
-                "half_edge_{} [pos=\"{},{}!\", shape=point, width=0.01, height=0.01]",
-                ids[0], mid[0], mid[1]
-            )?;
-            writeln!(
-                f,
-                "vertex_{} -> half_edge_{} [arrowhead=none]",
-                vertices[0].id(),
-                ids[0]
-            )?;
-            writeln!(
-                f,
-                "half_edge_{} -> vertex_{} [label=\"{}\"]",
-                ids[0],
-                vertices[1].id(),
-                ids[0]
-            )?;
-
-            if opt.twin {
-                writeln!(
-                    f,
-                    "half_edge_{} -> half_edge_{} [color=\"red\"]",
-                    ids[0], ids[1]
-                )?;
-            }
-
-            if opt.next {
-                writeln!(
-                    f,
-                    "half_edge_{} -> half_edge_{} [color=\"green\"]",
-                    ids[0],
-                    hedges[0].next().id(),
-                )?;
-            }
-
-            if opt.prev {
-                writeln!(
-                    f,
-                    "half_edge_{} -> half_edge_{} [color=\"blue\"]",
-                    ids[0],
-                    hedges[0].prev().id(),
-                )?;
-            }*/
+            ctx.set_font_size(font_size / 2.0);
+            let ext = ctx.text_extents(&num_text)?;
+            ctx.move_to(
+                num_pos[0] - ext.x_advance() / 2.0,
+                num_pos[1] - ext.y_bearing() - ext.height() / 2.0,
+            );
+            ctx.show_text(&num_text)?;
+            ctx.set_font_size(font_size);
         }
 
         for vertex in shell.iter_vertices() {
@@ -160,6 +98,4 @@ pub fn write_img<V>(
     }
 
     Ok(())
-
-    // writeln!(f, "}}")
 }
