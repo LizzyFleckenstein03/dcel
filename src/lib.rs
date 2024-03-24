@@ -167,6 +167,7 @@ fn short_debug_fn<'tok, 'brand, 'arena, T: Entity<'brand, 'arena>>(x: lens_t!(T)
     DisplayFn(move |f| short_debug_(T::type_name(), id, f))
 }
 
+/*
 fn short_debug_list<'tok, 'brand, 'arena, T, I>(iter: I, f: &mut Formatter) -> fmt::Result
 where
     'brand: 'tok + 'arena,
@@ -175,6 +176,7 @@ where
 {
     f.debug_list().entries(iter.map(short_debug_fn)).finish()
 }
+*/
 
 fn or_err<T>(cond: bool, err: T) -> Result<(), T> {
     if cond {
@@ -947,98 +949,4 @@ impl<'brand, 'arena, V> Dcel<'brand, 'arena, V> {
     ) -> Result<Mpkh<'brand, 'arena, V>, OperatorErr<Kpmh<'brand, 'arena, V>, KpmhError>> {
         Kpmh::new(new_shell, old_face, new_face).apply(self)
     }
-}
-
-use std::io::Write;
-
-fn _main() {
-    let show = |name, dcel: &Dcel<(&'static str, [i64; 2])>| {
-        write!(
-            &mut std::fs::File::create(name).unwrap(),
-            "{}",
-            DisplayFn(|f: &mut fmt::Formatter<'_>| dcel_write_dot(
-                dcel,
-                |v| v.1.map(|x| x as _),
-                |v, f| write!(f, "{}", v.0),
-                f,
-                DcelDotOptions {
-                    prev: false,
-                    next: true,
-                    twin: true,
-                }
-            ))
-        )
-        .unwrap();
-    };
-
-    GhostToken::new(|token| {
-        let arena = DcelArena::default();
-        let mut dcel = Dcel::from_token(token, &arena);
-
-        let body = dcel.new_body();
-        // Mevvlfs(a, [w, n], l, f, s)
-
-        //let op = dcel.mevvlfs(*body, [("W", [-4, 0]), ("N", [0, 4])]);
-        let op = dcel
-            .mevvlfs(*body, [("W", [-4, 0]), ("N", [0, 4])])
-            .unwrap();
-        let op2 = dcel.mev(*op.loop_, *op.vertices[1], ("E", [4, 0])).unwrap();
-        let op3 = dcel.mev(*op.loop_, *op2.vertex, ("S", [0, -4])).unwrap();
-
-        dcel.melf([*op3.vertex, *op.vertices[0]], *op.loop_)
-            .unwrap();
-        dcel.melf([*op.vertices[0], *op2.vertex], *op.loop_)
-            .unwrap();
-
-        show("cool_stuff.dot", &dcel);
-
-        /*println!("{:?}", op.edge.lens(&dcel));
-        println!("{:?}", op.vertices[0].lens(&dcel));
-        println!("{:?}", op.vertices[1].lens(&dcel));
-        println!("{:?}", op.loop_.lens(&dcel));
-        println!("{:?}", op.face.lens(&dcel));
-        println!("{:?}", op.shell.lens(&dcel));*/
-
-        //dbg!(body.lens(&dcel));
-
-        // dcel.undo(op);
-
-        /*
-
-        let (a, [w, n], _) = dcel.mevvls([("W", [-4, 0]), ("N", [0, 4])]);
-        show("1.dot", &dcel);
-
-        let b = dcel.mve(a, ("E", [4, 0])).unwrap().0;
-        show("2.dot", &dcel);
-
-        dcel.mve(a, ("S", [0, -4])).unwrap();
-        show("3.dot", &dcel);
-
-        //dcel.mel(w, n);
-        show("4.dot", &dcel);*/
-
-        /*
-        eprintln!(
-            "{} {}",
-                     a.borrow(&dcel.token).id.unwrap(),
-                     b.borrow(&dcel.token).id.unwrap()
-        );*/
-
-        /*
-        print!(
-            "{}",
-            "{}",
-                            layFn(|f: &mut fmt::Formatter<'_>| {
-                                   v in dcel.vertices.elements.iter() {
-                }
-
-
-                    h in dcel.half_edges.elements.iter() {
-                }
-
-                Ok(())
-            })
-                  })
-           );*/
-    });
 }

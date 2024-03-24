@@ -41,7 +41,7 @@ pub struct ObjExport<'tok, 'brand, 'arena, V, W, VPos, VTex, VNorm> {
     writer: &'tok mut W,
     dcel: &'tok Dcel<'brand, 'arena, V>,
     vertex_pos: VPos,
-    pos_ids: HashMap<usize, usize>,
+    pos_ids: Vec<Option<usize>>,
     textures: VertAttr<lens!(Face), VTex, (f64, Option<(f64, Option<f64>)>), V>,
     normals: VertAttr<lens!(Face), VNorm, (f64, f64, f64), V>,
 }
@@ -65,7 +65,7 @@ where
             writer,
             dcel,
             vertex_pos,
-            pos_ids: HashMap::new(),
+            pos_ids: Vec::new(),
             textures: VertAttr::new(vertex_texture),
             normals: VertAttr::new(vertex_normal),
         }
@@ -76,7 +76,11 @@ where
         let mut next_id = 1;
         for shell in self.dcel.iter_bodies().flat_map(Lens::iter_shells) {
             for vertex in shell.iter_vertices() {
-                self.pos_ids.insert(vertex.id(), next_id);
+                let v_id = vertex.id();
+                if v_id <= self.pos_ids.len() {
+                    self.pos_ids.resize(v_id + 1, None);
+                }
+                self.pos_ids.insert(v_id, Some(next_id));
                 next_id += 1;
 
                 let (x, y, z, w) = (self.vertex_pos)(vertex.data());
@@ -132,7 +136,7 @@ where
         half_edge: lens!(HalfEdge),
     ) -> std::io::Result<()> {
         let vert = half_edge.origin();
-        write!(self.writer, " {}", self.pos_ids[&vert.id()])?;
+        write!(self.writer, " {}", self.pos_ids[vert.id()].unwrap())?;
 
         let t = self.textures.add(face, vert.id(), vert.data());
         let n = self.normals.add(face, vert.id(), vert.data());

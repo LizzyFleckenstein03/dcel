@@ -2,7 +2,7 @@ use dcel::{ptr_t, Dcel, ObjExport, ObjImport, Ptr, Shell};
 use std::array::from_fn;
 use std::collections::HashMap;
 
-fn avg(mut iter: impl Iterator<Item = [f32; 3]>) -> Option<[f32; 3]> {
+fn avg(iter: impl Iterator<Item = [f32; 3]>) -> Option<[f32; 3]> {
     let mut count = 0usize;
     let mut accum = [0.0; 3];
 
@@ -113,7 +113,7 @@ fn main() {
         let shell = body.iter_shells(&dcel).next().unwrap().item;
 
         for i in 0..5 {
-            println!("{i}...");
+            println!("subdivision level {i}...");
             catmull_clark_subdivision(&mut dcel, shell);
         }
 
