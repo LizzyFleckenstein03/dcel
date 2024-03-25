@@ -73,8 +73,8 @@ macro_rules! entity {
 	($name:ident : $T:ident $(($init_name:ident : $init_ty:ty))?
 		$(, $($custom_field:ident : $custom_ty:ty = $custom_expr:expr),* )?
 		$(;
-			$( $field_vis:vis $field:ident
-				$([ $list_singular:ident : $list_name:ident $(($list_init:ty))? $($list_back:ident)? ])?
+			$( $(#[$field_attr:meta])* $field_vis:vis $field:ident
+				$([ $(#[$list_attr:meta])* $list_singular:ident : $list_name:ident $(($list_init:ty))? $($list_back:ident)? ])?
 			 : $field_ty:ident ),*
 		)?
 	) => { paste! {
@@ -138,6 +138,7 @@ macro_rules! entity {
 		#[allow(unused)]
 		impl<'brand, 'arena, V> ptr!($T) {
 			$($(
+				$(#[$field_attr])*
 				$field_vis fn $field(self, token: &impl ReflAsRef<GhostToken<'brand>>) -> ptr!($field_ty) {
 					self.[<maybe_ $field>](token).unwrap()
 				}
@@ -155,6 +156,7 @@ macro_rules! entity {
 				}
 
 				$(
+					$(#[$list_attr])*
 					pub fn [<iter_ $field>]<'tok>(
 						self,
 						token: &'tok impl ReflAsRef<GhostToken<'brand>>,
@@ -163,7 +165,7 @@ macro_rules! entity {
 						EntityIterator::new(self.[<maybe_ $field>](token), token)
 					}
 
-					pub fn [<iter_mut_ $field>]<T: ReflAsMut<GhostToken<'brand>>>(
+					fn [<iter_mut_ $field>]<T: ReflAsMut<GhostToken<'brand>>>(
 						self,
 						token: &mut T,
 						mut f: impl FnMut(ptr!($field_ty), &mut T),
@@ -177,7 +179,10 @@ macro_rules! entity {
 							let next_item = item.next(token);
 							f(item, token);
 							item = next_item;
-							matches!(item.maybe_id(token), Some(x) if x != last)
+
+							// hack to ensure killing the item is allowed
+							// bypassing generational references
+							matches!(item.cell.borrow(ReflAsRef::as_ref(token)).maybe_id(), Some(x) if x != last)
 						} {}
 					}
 

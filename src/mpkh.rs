@@ -72,6 +72,9 @@ fn maybe_split<'brand, 'arena, V>(
     Some(new_shell)
 }
 
+/// Operator corresponding to MPKH in SNUMOD.
+///
+/// See [`Dcel::mpkh`] for details.
 pub struct Mpkh<'brand, 'arena, V> {
     pub loop_: ptr!(Loop),
 }
@@ -82,6 +85,7 @@ impl<'brand, 'arena, V> Mpkh<'brand, 'arena, V> {
     }
 }
 
+/// Precondition Error for [`Mpkh`].
 #[derive(Debug, Error)]
 pub enum MpkhError {
     #[error("loop is not an inner loop")]
@@ -131,12 +135,16 @@ impl<'brand, 'arena, V> Operator<'brand, 'arena, V> for Mpkh<'brand, 'arena, V> 
     }
 }
 
+/// Operator corresponding to KPMH in SNUMOD.
+///
+/// See [`Dcel::kpmh`] for details.
 pub struct Kpmh<'brand, 'arena, V> {
     pub new_shell: Option<own!(Shell)>,
     pub old_face: ptr!(Face),
     pub new_face: own!(Face),
 }
 
+/// Precondition Error for [`Kpmh`].
 #[derive(Error, Debug)]
 pub enum KpmhError {
     #[error("face does not match shell")]

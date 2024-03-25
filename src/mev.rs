@@ -2,6 +2,9 @@ use crate::*;
 
 // Make Edge-Vertex
 
+/// Operator corresponding to MEV in SNUMOD.
+///
+/// See [`Dcel::mev`] for details.
 pub struct Mev<'brand, 'arena, V> {
     pub loop_: ptr!(Loop),
     pub vertex: ptr!(Vertex),
@@ -18,6 +21,7 @@ impl<'brand, 'arena, V> Mev<'brand, 'arena, V> {
     }
 }
 
+/// Precondition Error for [`Mev`].
 #[derive(Debug, Error)]
 pub enum MevError {
     #[error("vertex is not part of loop")]
@@ -72,6 +76,9 @@ impl<'brand, 'arena, V> Operator<'brand, 'arena, V> for Mev<'brand, 'arena, V> {
     }
 }
 
+/// Operator corresponding to KEV in SNUMOD.
+///
+/// See [`Dcel::kev`] for details.
 pub struct Kev<'brand, 'arena, V> {
     pub edge: own!(Edge),
     pub vertex: own!(Vertex),
@@ -83,6 +90,7 @@ impl<'brand, 'arena, V> Kev<'brand, 'arena, V> {
     }
 }
 
+/// Precondition Error for [`Kev`].
 #[derive(Debug, Error)]
 pub enum KevError {
     #[error("half edges don't go back and forth between new and old vertex")]

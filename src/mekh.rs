@@ -1,5 +1,8 @@
 use crate::*;
 
+/// Operator corresponding to MEKH in SNUMOD.
+///
+/// See [`Dcel::mekh`] for details.
 pub struct Mekh<'brand, 'arena, V> {
     pub shell: ptr!(Shell),
     pub into_loop: ptr!(Loop),
@@ -26,6 +29,7 @@ impl<'brand, 'arena, V> Mekh<'brand, 'arena, V> {
     }
 }
 
+/// Precondition Error for [`Mekh`].
 #[derive(Debug, Error)]
 pub enum MekhError {
     #[error("cannot join loop with itself")]
@@ -107,6 +111,9 @@ impl<'brand, 'arena, V> Operator<'brand, 'arena, V> for Mekh<'brand, 'arena, V> 
     }
 }
 
+/// Operator corresponding to KEMH in SNUMOD.
+///
+/// See [`Dcel::kemh`] for details.
 pub struct Kemh<'brand, 'arena, V> {
     pub shell: ptr!(Shell),
     pub edge: own!(Edge),
@@ -114,6 +121,7 @@ pub struct Kemh<'brand, 'arena, V> {
     pub hole_vertex: ptr!(Vertex),
 }
 
+/// Precondition Error for [`Kemh`].
 #[derive(Error, Debug)]
 pub enum KemhError {
     #[error("vertex is not part of edge")]

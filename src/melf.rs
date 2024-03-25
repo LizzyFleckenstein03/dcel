@@ -2,6 +2,9 @@ use crate::*;
 
 // Make Edge-Vertex
 
+/// Operator corresponding to MEL in SNUMOD.
+///
+/// See [`Dcel::melf`] for details.
 pub struct Melf<'brand, 'arena, V> {
     pub vertices: [ptr!(Vertex); 2],
     pub loop_: ptr!(Loop),
@@ -13,6 +16,7 @@ impl<'brand, 'arena, V> Melf<'brand, 'arena, V> {
     }
 }
 
+/// Precondition Error for [`Melf`].
 #[derive(Debug, Error)]
 pub enum MelfError {
     #[error("vertex is not part of loop")]
@@ -88,12 +92,16 @@ impl<'brand, 'arena, V> Operator<'brand, 'arena, V> for Melf<'brand, 'arena, V> 
     }
 }
 
+/// Operator corresponding to KEL in SNUMOD.
+///
+/// See [`Dcel::kelf`] for details.
 pub struct Kelf<'brand, 'arena, V> {
     pub edge: own!(Edge),
     pub loop_: own!(Loop),
     pub face: own!(Face),
 }
 
+/// Precondition Error for [`Kelf`].
 impl<'brand, 'arena, V> Kelf<'brand, 'arena, V> {
     pub fn new(edge: own!(Edge), loop_: own!(Loop), face: own!(Face)) -> Self {
         Self { edge, loop_, face }

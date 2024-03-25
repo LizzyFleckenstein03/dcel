@@ -1,5 +1,8 @@
 use crate::*;
 
+/// An iterator over a linked list of entities.
+///
+/// See the various `.iter_*()` methods on [`Ptr`] for details.
 pub struct EntityIterator<'tok, 'brand, 'arena, T>(Option<(lens_t!(T), lens_t!(T))>);
 
 impl<'tok, 'brand, 'arena, T> Clone for EntityIterator<'tok, 'brand, 'arena, T> {

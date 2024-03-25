@@ -2,6 +2,9 @@ use crate::*;
 
 // Make Vertex-Edge
 
+/// Operator corresponding to MVE in SNUMOD.
+///
+/// See [`Dcel::mve`] for details.
 pub struct Mve<'brand, 'arena, V> {
     pub edge: ptr!(Edge),
     pub data: V,
@@ -87,6 +90,9 @@ impl<'brand, 'arena, V> Operator<'brand, 'arena, V> for Mve<'brand, 'arena, V> {
     }
 }
 
+/// Operator corresponding to KVE in SNUMOD.
+///
+/// See [`Dcel::kve`] for details.
 pub struct Kve<'brand, 'arena, V> {
     pub edge: own!(Edge),
     pub vertex: own!(Vertex),
@@ -98,6 +104,7 @@ impl<'brand, 'arena, V> Kve<'brand, 'arena, V> {
     }
 }
 
+/// Precondition Error for [`Kve`].
 #[derive(Debug, Error)]
 pub enum KveError {
     #[error("vertex is not part of edge")]

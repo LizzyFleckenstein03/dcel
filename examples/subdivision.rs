@@ -1,4 +1,4 @@
-use dcel::{ptr_t, Dcel, ObjExport, ObjImport, Ptr, Shell};
+use dcel::{ptr_t, Dcel, ObjExport, ObjImport, Shell};
 use std::array::from_fn;
 use std::collections::HashMap;
 

@@ -25,6 +25,8 @@ macro_rules! try_check {
     };
 }
 
+use crate as dcel;
+
 #[macro_use]
 mod entity;
 use entity::*;
@@ -71,6 +73,7 @@ pub use msev::*;
 mod mpkh;
 pub use mpkh::*;
 
+/// A trait equivalent to [`AsRef`], except with a built-in [reflexivity](https://doc.rust-lang.org/stable/std/convert/trait.AsRef.html#reflexivity) rule.
 pub trait ReflAsRef<T> {
     fn as_ref(&self) -> &T;
 }
@@ -81,6 +84,7 @@ impl<T> ReflAsRef<T> for T {
     }
 }
 
+/// A trait equivalent to [`AsMut`], except with a built-in [reflexivity](https://doc.rust-lang.org/stable/std/convert/trait.AsMut.html#reflexivity) rule.
 pub trait ReflAsMut<T>: ReflAsRef<T> {
     fn as_mut(&mut self) -> &mut T;
 }
@@ -103,48 +107,186 @@ impl<F: Fn(&mut Formatter) -> fmt::Result> Debug for DisplayFn<F> {
     }
 }
 
+/// Returns a [`Ptr`] type for a given type, using `'brand` and `'arena` lifetimes from the scope.
+///
+/// `ptr_!(T)` expands to `dcel::Ptr<'brand, 'arena, T>`
+///
+/// This macro is useful versus [`ptr!`] if you don't want to populate the vertex data `V`
+/// parameter from the environment.
+///
+/// # Examples
+///
+/// ```
+/// use dcel::{ptr_t, Dcel, Vertex};
+///
+/// fn vertex_len<'brand, 'arena>(
+///     vert: ptr_t!(Vertex<'brand, 'arena, [f32; 2]>), //
+///     dcel: &Dcel<'brand, 'arena, [f32; 2]>,
+/// ) -> f32 {
+///     let [x, y] = vert.data(dcel);
+///     (x * x + y * y).sqrt()
+/// }
+/// ```
 #[macro_export]
 macro_rules! ptr_t {
 	($T:ty) => {
-		Ptr<'brand, 'arena, $T>
+		dcel::Ptr<'brand, 'arena, $T>
 	}
 }
 
+/// Returns a [`Ptr`] type for a given type, using `'brand` and `'arena` lifetimes and the vertex data parameter `V` from the scope.
+///
+/// `ptr!(T)` expands to `dcel::Ptr<'brand, 'arena, T<'brand, 'arena, V>>`
+///
+/// # Examples
+///
+/// ```
+/// use dcel::{ptr, Dcel, Vertex};
+/// use std::ops::Add;
+///
+/// fn vertex_sum<'brand, 'arena, O, V>(verts: [ptr!(Vertex); 2], dcel: &Dcel<'brand, 'arena, V>) -> O
+/// where
+///     for<'a> &'a V: Add<Output = O>
+/// {
+///     verts[0].data(dcel) + verts[1].data(dcel)
+/// }
+/// ```
 #[macro_export]
 macro_rules! ptr {
 	($T:ident) => {
-		Ptr<'brand, 'arena, $T<'brand, 'arena, V>>
+		dcel::Ptr<'brand, 'arena, $T<'brand, 'arena, V>>
 	};
 }
 
+/// Returns a [`Own`] type for a given type, using `'brand` and `'arena` lifetimes from the scope.
+///
+/// `own_t!(T)` expands to `dcel::Own<'brand, 'arena, T>`
+///
+/// This macro is useful versus [`own!`] if you don't want to populate the vertex data `V`
+/// parameter from the environment.
+///
+/// # Examples
+///
+/// ```
+/// use dcel::{own_t, Dcel, Vertex, Edge};
+///
+/// fn sum_kve<'brand, 'arena>(
+///     ops: Vec<(own_t!(Vertex<'brand, 'arena, u32>), own_t!(Edge<'brand, 'arena, u32>))>,
+///     dcel: &mut Dcel<'brand, 'arena, u32>,
+/// ) -> u32 {
+///     ops
+///         .into_iter()
+///         .map(|(vertex, edge)| dcel.kve(edge, vertex).unwrap().data)
+///         .sum()
+/// }
+/// ```
 #[macro_export]
 macro_rules! own_t {
 	($T:ty) => {
-		Own<'brand, 'arena, $T>
+		dcel::Own<'brand, 'arena, $T>
 	}
 }
 
+/// Returns a [`Own`] type for a given type, using `'brand` and `'arena` lifetimes and the vertex data parameter `V` from the scope.
+///
+/// `own!(T)` expands to `dcel::Own<'brand, 'arena, T<'brand, 'arena, V>>`
+///
+/// # Examples
+///
+/// ```
+/// use dcel::{own, Dcel, Vertex, Edge};
+///
+/// fn sum_kve<'brand, 'arena, V: std::iter::Sum>(
+///     ops: Vec<(own!(Vertex), own!(Edge))>,
+///     dcel: &mut Dcel<'brand, 'arena, V>,
+/// ) -> V {
+///     ops
+///         .into_iter()
+///         .map(|(vertex, edge)| dcel.kve(edge, vertex).unwrap().data)
+///         .sum()
+/// }
+/// ```
 #[macro_export]
 macro_rules! own {
 	($T:ident) => {
-		Own<'brand, 'arena, $T<'brand, 'arena, V>>
+		dcel::Own<'brand, 'arena, $T<'brand, 'arena, V>>
 	};
 }
 
+/// Returns a [`Lens`] type for a given type, using `'tok`, `'brand` and `'arena` lifetimes from the scope.
+///
+/// `lens_t!(T)` expands to `dcel::Lens<'tok, 'brand, 'arena, T>`
+///
+/// This macro is useful versus [`lens!`] if you don't want to populate the vertex data `V`
+/// parameter from the environment.
+///
+/// # Examples
+///
+/// ```
+/// use dcel::{lens_t, Dcel, Vertex};
+///
+/// fn vertex_len<'tok, 'brand, 'arena>(
+///     vert: lens_t!(Vertex<'brand, 'arena, [f32; 2]>),
+/// ) -> f32 {
+///     let [x, y] = vert.data();
+///     (x * x + y * y).sqrt()
+/// }
+/// ```
 #[macro_export]
 macro_rules! lens_t {
 	($T:ty) => {
-		Lens<'tok, 'brand, 'arena, $T>
+		dcel::Lens<'tok, 'brand, 'arena, $T>
 	}
 }
 
+/// Returns a [`Lens`] type for a given type, using `'tok`, `'brand` and `'arena` lifetimes and the vertex data parameter `V` from the scope.
+///
+/// `lens!(T)` expands to `dcel::Lens<'tok, 'brand, 'arena, T<'brand, 'arena, V>>`
+///
+/// # Examples
+///
+/// ```
+/// use dcel::{lens, Dcel, Vertex};
+/// use std::ops::Add;
+///
+/// fn vertex_sum<'tok, 'brand, 'arena, O, V>(verts: [lens!(Vertex); 2]) -> O
+/// where
+///     for<'a> &'a V: Add<Output = O>
+/// {
+///     verts[0].data() + verts[1].data()
+/// }
+/// ```
 #[macro_export]
 macro_rules! lens {
 	($T:ident) => {
-		Lens<'tok, 'brand, 'arena, $T<'brand, 'arena, V>>
+		dcel::Lens<'tok, 'brand, 'arena, $T<'brand, 'arena, V>>
 	};
 }
 
+/// For each identifier passed in, introduces a new binding shadowing the old one
+/// containing a lens to what was previously a pointer. Takes a token as first argument.
+///
+/// # Examples
+/// ```
+/// use dcel::{mklens, Dcel, Kevvlfs};
+///
+/// Dcel::new(|mut dcel| {
+///     let body = dcel.new_body();
+///     let Kevvlfs {
+///         edge,
+///         face,
+///         loop_,
+///         shell,
+///         ..
+///     } = dcel.mevvlfs(*body, [4, 5]).unwrap();
+///
+///     mklens!(&dcel, edge, face, loop_, shell);
+///
+///     assert_eq!(face.outer_loop(), loop_);
+///     assert_eq!(face.shell(), shell);
+///     assert_eq!(edge.half_edges()[0].loop_(), loop_);
+///     assert_eq!(edge.half_edges()[1].loop_(), loop_);
+/// })
 #[macro_export]
 macro_rules! mklens {
 	($token: expr, $($name:ident),*) => {
@@ -187,7 +329,22 @@ fn or_err<T>(cond: bool, err: T) -> Result<(), T> {
     }
 }
 
-pub struct Ptr<'brand, 'arena, T>(pub &'arena GhostCell<'brand, T>);
+/// A non-owning pointer to a topological entity like a Vertex or a HalfEdge.
+///
+/// Being a wrapper around [`GhostCell`], it requires a reference to a [`GhostToken`] to access or mutate its contents.
+///
+/// [`Ptr`]s to different kinds of entities have different methods available to access their
+/// contents and this is the primary way to read out their data. [`Ptr`] is also the primary way
+/// to pass around entities.
+///
+/// # Safety
+/// Entities can be killed while pointers to them are held, but the integrity of [`Ptr`]s
+/// is ensured using generational references. Trying to access a [`Ptr`] pointing to an item that has been killed
+/// results in a use after free panic, even when its memory is being reused.
+pub struct Ptr<'brand, 'arena, T> {
+    cell: &'arena GhostCell<'brand, T>,
+    id: usize,
+}
 
 impl<'brand, 'arena, T> Clone for ptr_t!(T) {
     fn clone(&self) -> Self {
@@ -196,13 +353,25 @@ impl<'brand, 'arena, T> Clone for ptr_t!(T) {
 }
 impl<'brand, 'arena, T> Copy for ptr_t!(T) {}
 
-impl<'brand, 'arena, T> ptr_t!(T) {
+#[allow(unused)]
+impl<'brand, 'arena, T: Entity<'brand, 'arena>> ptr_t!(T) {
+    fn new(cell: &'arena GhostCell<'brand, T>, token: &impl ReflAsRef<GhostToken<'brand>>) -> Self {
+        let id = cell.borrow(token.as_ref()).id();
+        Self { id, cell }
+    }
+
+    fn clear(self, token: &mut impl ReflAsMut<GhostToken<'brand>>) {
+        self.borrow_mut(token).clear()
+    }
+
     pub fn borrow<'tok, 'out>(self, token: &'tok impl ReflAsRef<GhostToken<'brand>>) -> &'out T
     where
         'arena: 'out,
         'tok: 'out,
     {
-        self.0.borrow(token.as_ref())
+        let borrow = self.cell.borrow(token.as_ref());
+        assert_eq!(borrow.maybe_id(), Some(self.id), "use after free");
+        borrow
     }
 
     pub fn borrow_mut<'tok, 'out>(
@@ -213,20 +382,48 @@ impl<'brand, 'arena, T> ptr_t!(T) {
         'arena: 'out,
         'tok: 'out,
     {
-        self.0.borrow_mut(token.as_mut())
+        let borrow = self.cell.borrow_mut(token.as_mut());
+        assert_eq!(borrow.maybe_id(), Some(self.id), "use after free");
+        borrow
     }
 
+    /// Creates a Lens holding this pointer and the given token.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dcel::{Dcel, Kevvlfs};
+    ///
+    /// Dcel::new(|mut dcel| {
+    ///     let body = dcel.new_body();
+    ///     let Kevvlfs { edge, face, .. } = dcel.mevvlfs(*body, [4, 5]).unwrap();
+    ///
+    ///     // without .lens()
+    ///     assert!(edge.half_edges(&dcel)[0].loop_(&dcel).face(&dcel).eq(*face, &dcel));
+    ///
+    ///     // with .lens()
+    ///     assert!(edge.lens(&dcel).half_edges()[0].loop_().face().eq(*face));
+    /// })
     pub fn lens<'tok>(self, token: &'tok impl ReflAsRef<GhostToken<'brand>>) -> lens_t!(T) {
         Lens::new(self, token)
     }
-}
 
-#[allow(unused)]
-impl<'brand, 'arena, T: Entity<'brand, 'arena>> ptr_t!(T) {
-    fn clear(self, token: &mut impl ReflAsMut<GhostToken<'brand>>) {
-        self.borrow_mut(token).clear()
-    }
-
+    /// A unique id for the item referenced by this pointer.
+    /// The id is unique *only* for items of the same type.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use dcel::{Dcel, Kevvlfs};
+    ///
+    /// Dcel::new(|mut dcel| {
+    ///	    let body = dcel.new_body();
+    ///     let Kevvlfs { edge, vertices: [a, b], .. } = dcel.mevvlfs(*body, [4, 4]).unwrap();
+    ///
+    ///     assert_ne!(a.id(&dcel), b.id(&dcel)); // IDs of two distinct vertices must be different
+    ///     // assert_ne!(a.id(&dcel), edge.id(&dcel)); // WRONG! may panic
+    /// })
+    /// ```
     pub fn id(self, token: &impl ReflAsRef<GhostToken<'brand>>) -> usize {
         self.borrow(token).id()
     }
@@ -237,6 +434,21 @@ impl<'brand, 'arena, T: Entity<'brand, 'arena>> ptr_t!(T) {
         self.borrow(token).alive()
     }
 
+    /// Compares the pointer to `other` by-reference.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use dcel::Dcel;
+    ///
+    /// Dcel::new(|mut dcel| {
+    ///	    let body = dcel.new_body();
+    ///     let [a, b] = dcel.mevvlfs(*body, [4, 4]).unwrap().vertices;
+    ///
+    ///     assert!(a.eq(*a, &dcel));
+    ///     assert!(!a.eq(*b, &dcel));
+    /// })
+    /// ```
     pub fn eq(self, other: Self, token: &impl ReflAsRef<GhostToken<'brand>>) -> bool {
         self.borrow(token) == other.borrow(token)
     }
@@ -268,10 +480,27 @@ impl<'brand, 'arena, T: Entity<'brand, 'arena>> ptr_t!(T) {
     }
 }
 
+/// A owning pointer to a topological entity like a Vertex or a HalfEdge.
+///
+/// Operators that create entities return [`Own`]ing pointers to them. Unlike [`Ptr`], [`Own`]
+/// does not implement [`Copy`]/[`Clone`], meaning that only one instance to it exists for a given
+/// item. Similarly, operators that kill entities require [`Own`]ing pointers, preventing
+/// conceptual double-free bugs at compile time.
+///
+/// [`Own`] dereferences to [`Ptr`].
+///
+/// # Safety
+/// Since it is not feasible to keep around [`Own`] pointers for every application (for example,
+/// traversing a mesh and killing parts of it based on read data in the form of [`Ptr`]s),
+/// [`Own::unsafe_make_owned`] is provided, which turns a [`Ptr`] into an `[Own]`. Trying to free
+/// the same entity twice results in an use after free panic.
 pub struct Own<'brand, 'arena, T>(ptr_t!(T));
 
 impl<'brand, 'arena, T> Own<'brand, 'arena, T> {
-    // avoid this
+    /// Turns an [`Own`] into an [`Ptr`]. This is fully sound, but may cause runtime crashes
+    /// if an entity is killed twice.
+    ///
+    /// Avoid this unless it really makes sense in your application to use it.
     pub fn unsafe_make_owned(this: ptr_t!(T)) -> Self {
         Self(this)
     }
@@ -285,6 +514,37 @@ impl<'brand, 'arena, T> Deref for own_t!(T) {
     }
 }
 
+/// A wrapper around a [`Ptr`] that also contains an immutable GhostToken reference.
+///
+/// A [`Lens`] has the same methods as a [`Ptr`] (minus methods that require mutability)
+/// except it does not require a [`GhostToken`] as argument since that is already stored.
+/// [`Lens`] methods also return [`Lens`]es instead of [`Ptr`]s, which allows convenient traversal.
+///
+/// This also allows [`Lens`] to implement [`PartialEq`], [`Hash`] and [`Debug`], which [`Ptr`]
+/// can't.
+///
+/// For documentation of [`Lens`] methods, see the [`Ptr`] equivalents.
+///
+/// Since holding an immutable borrow to the GhostToken prevents mutation of the [`Dcel`], lenses
+/// are best used for read-only (parts of) tasks.
+///
+/// A [`Lens`] can be created either by using the [`Lens::new`] method or the [`Ptr::lens`] method.
+///
+/// # Examples
+///
+/// ```
+/// use dcel::{Dcel, Kevvlfs};
+///
+/// Dcel::new(|mut dcel| {
+///     let body = dcel.new_body();
+///     let Kevvlfs { edge, face, .. } = dcel.mevvlfs(*body, [4, 5]).unwrap();
+///
+///     // without using lens
+///     assert!(edge.half_edges(&dcel)[0].loop_(&dcel).face(&dcel).eq(*face, &dcel));
+///
+///     // using lens
+///     assert!(edge.lens(&dcel).half_edges()[0].loop_().face().eq(*face));
+/// })
 pub struct Lens<'tok, 'brand, 'arena, T> {
     pub item: ptr_t!(T),
     pub token: &'tok GhostToken<'brand>,
@@ -297,14 +557,14 @@ impl<'tok, 'brand, 'arena, T> Clone for lens_t!(T) {
 }
 impl<'tok, 'brand, 'arena, T> Copy for lens_t!(T) {}
 
-impl<'tok, 'brand, 'arena, T: PartialEq> PartialEq for lens_t!(T) {
+impl<'tok, 'brand, 'arena, T: Entity<'brand, 'arena>> PartialEq for lens_t!(T) {
     fn eq(&self, other: &Self) -> bool {
         self.item.borrow(self.token) == other.item.borrow(other.token)
     }
 }
-impl<'tok, 'brand, 'arena, T: PartialEq> Eq for lens_t!(T) {}
+impl<'tok, 'brand, 'arena, T: Entity<'brand, 'arena>> Eq for lens_t!(T) {}
 
-impl<'tok, 'brand, 'arena, T: Hash> Hash for lens_t!(T) {
+impl<'tok, 'brand, 'arena, T: Entity<'brand, 'arena> + Hash> Hash for lens_t!(T) {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.item.borrow(self.token).hash(state);
     }
@@ -322,17 +582,15 @@ impl<'tok, 'brand, 'arena, T> From<lens_t!(T)> for ptr_t!(T) {
     }
 }
 
-impl<'tok, 'brand, 'arena, T> lens_t!(T) {
+#[allow(unused)]
+impl<'tok, 'brand, 'arena, T: Entity<'brand, 'arena>> lens_t!(T) {
     pub fn new(item: ptr_t!(T), token: &'tok impl ReflAsRef<GhostToken<'brand>>) -> Self {
         Self {
             item,
             token: token.as_ref(),
         }
     }
-}
 
-#[allow(unused)]
-impl<'tok, 'brand, 'arena, T: Entity<'brand, 'arena>> lens_t!(T) {
     pub fn id(self) -> usize {
         self.item.id(&self)
     }
@@ -367,6 +625,11 @@ entity!(vertex: Vertex (init: V),
     outgoing: HalfEdge
 );
 
+/// An iterator over the outgoing HalfEdges from a vertex.
+///
+/// See [ptr!(Vertex)::iter_outgoing] for details.
+///
+/// [ptr!(Vertex)::iter_outgoing]: dcel::Ptr#method.iter_outgoing
 pub struct OutgoingIterator<'tok, 'brand, 'arena, V>(Option<(lens!(HalfEdge), lens!(HalfEdge))>);
 
 impl<'tok, 'brand, 'arena, V> Clone for OutgoingIterator<'tok, 'brand, 'arena, V> {
@@ -411,6 +674,19 @@ impl<'brand, 'arena, V> own!(Vertex) {
 }
 
 impl<'brand, 'arena, V> ptr!(Vertex) {
+    /// Returns an immutable borrow to the user-data associated with the vertex.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dcel::Dcel;
+    ///
+    /// Dcel::new(|mut dcel| {
+    ///     let body = dcel.new_body();
+    ///     let [_, vertex] = dcel.mevvlfs(*body, [4, 5]).unwrap().vertices;
+    ///
+    ///     assert_eq!(*vertex.data(&dcel), 5);
+    /// })
     pub fn data<'tok, 'out>(self, token: &'tok impl ReflAsRef<GhostToken<'brand>>) -> &'out V
     where
         'arena: 'out,
@@ -419,6 +695,20 @@ impl<'brand, 'arena, V> ptr!(Vertex) {
         self.borrow(token).data.as_ref().unwrap()
     }
 
+    /// Returns a mutable borrow to the user-data associated with the vertex.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dcel::Dcel;
+    ///
+    /// Dcel::new(|mut dcel| {
+    ///     let body = dcel.new_body();
+    ///     let [_, vertex] = dcel.mevvlfs(*body, [4, 5]).unwrap().vertices;
+    ///
+    ///     *vertex.mut_data(&mut dcel) = 10;
+    ///     assert_eq!(*vertex.data(&dcel), 10);
+    /// })
     pub fn mut_data<'tok, 'out>(
         self,
         token: &'tok mut impl ReflAsMut<GhostToken<'brand>>,
@@ -430,15 +720,46 @@ impl<'brand, 'arena, V> ptr!(Vertex) {
         self.borrow_mut(token).data.as_mut().unwrap()
     }
 
+    /// Returns an iterator over lenses to all half-edges going out of this vertex
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dcel::{Dcel, Kevvlfs};
+    /// use std::iter::once;
+    ///
+    /// Dcel::new(|mut dcel| {
+    ///     let body = dcel.new_body();
+    ///     let Kevvlfs { edge, vertices: [vertex, _], .. } = dcel.mevvlfs(*body, [4, 5]).unwrap();
+    ///     let [a, b] = edge.lens(&dcel).half_edges();
+    ///     let outgoing = vertex.iter_outgoing(&dcel);
+    ///
+    ///     assert!(outgoing.eq(once(a)) || outgoing.eq(once(b)));
+    /// })
     pub fn iter_outgoing<'tok>(
         self,
         token: &'tok impl ReflAsRef<GhostToken<'brand>>,
     ) -> OutgoingIterator<'tok, 'brand, 'arena, V> {
-        // FIXME: maybe enforce at least one item by using .outgoing()
+        // FIXME: maybe enforce at least one item by using Some(self.outgoing())
         // there should be no "standalone" vertices (?)
         OutgoingIterator::new(self.maybe_outgoing(token), token)
     }
 
+    /// Returns a half-edge going out of this vertex belonging to a given loop, if one exists.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dcel::{Dcel, Kevvlfs};
+    ///
+    /// Dcel::new(|mut dcel| {
+    ///     let body = dcel.new_body();
+    ///     let Kevvlfs { edge, vertices: [vertex, _], loop_, .. } = dcel.mevvlfs(*body, [4, 5]).unwrap();
+    ///     let [a, b] = edge.lens(&dcel).half_edges();
+    ///     let outgoing = vertex.find_outgoing(*loop_, &dcel).unwrap();
+    ///
+    ///     assert!(a.eq(outgoing) || b.eq(outgoing));
+    /// })
     pub fn find_outgoing(
         self,
         loop_: ptr!(Loop),
@@ -469,15 +790,95 @@ impl<'tok, 'brand, 'arena, V> lens!(Vertex) {
     }
 }
 
-// TODO: target
 entity!(half_edge: HalfEdge;
+    /// Returns the Vertex this half-edge is anchored on (dual of target).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dcel::{mklens, Dcel, Kevvlfs};
+    ///
+    /// Dcel::new(|mut dcel| {
+    ///     let body = dcel.new_body();
+    ///     let Kevvlfs { edge, vertices: [v1, v2], .. } = dcel.mevvlfs(*body, [4, 5]).unwrap();
+    ///     let [x1, x2] = edge.half_edges(&dcel).map(|x| x.origin(&dcel));
+    ///     mklens!(&dcel, v1, v2, x1, x2);
+    ///
+    ///     assert!([x1, x2] == [v1, v2] || [x1, x2] == [v2, v1]);
+    /// })
     pub origin: Vertex,
+    /// Returns the twin of this HalfEdge.
+    ///
+    /// Twins have their target/origin swapped and face in opposite directions.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dcel::Dcel;
+    ///
+    /// Dcel::new(|mut dcel| {
+    ///     let body = dcel.new_body();
+    ///     let edge = dcel.mevvlfs(*body, [4, 5]).unwrap().edge;
+    ///     let [a, b] = edge.half_edges(&dcel);
+    ///
+    ///     assert!(a.twin(&dcel).eq(b, &dcel));
+    ///     assert!(b.twin(&dcel).eq(a, &dcel));
+    /// })
     pub twin: HalfEdge,
+    /// Returns a back pointer to the Loop this HalfEdge belongs is part of.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dcel::{Dcel, Kevvlfs};
+    ///
+    /// Dcel::new(|mut dcel| {
+    ///     let body = dcel.new_body();
+    ///     let Kevvlfs { edge, loop_, .. } = dcel.mevvlfs(*body, [4, 5]).unwrap();
+    ///     let [a, b] = edge.half_edges(&dcel);
+    ///
+    ///     assert!(a.loop_(&dcel).eq(*loop_, &dcel));
+    ///     assert!(b.loop_(&dcel).eq(*loop_, &dcel));
+    /// })
     pub loop_: Loop,
+    /// Returns a back pointer to the Edge (combination of both twins) this HalfEdge belongs to.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dcel::Dcel;
+    ///
+    /// Dcel::new(|mut dcel| {
+    ///     let body = dcel.new_body();
+    ///     let edge = dcel.mevvlfs(*body, [4, 5]).unwrap().edge;
+    ///     let [a, b] = edge.half_edges(&dcel);
+    ///
+    ///     assert!(a.edge(&dcel).eq(*edge, &dcel));
+    ///     assert!(b.edge(&dcel).eq(*edge, &dcel));
+    /// })
     pub edge: Edge
 );
 
 impl<'brand, 'arena, V> ptr!(HalfEdge) {
+    /// Returns the vertex this half-edge points to (dual of origin).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dcel::{Dcel, Kevvlfs};
+    ///
+    /// Dcel::new(|mut dcel| {
+    ///     let body = dcel.new_body();
+    ///     let Kevvlfs { edge, vertices: [mut v1, mut v2], .. } = dcel.mevvlfs(*body, [4, 5]).unwrap();
+    ///     let [a, b] = edge.lens(&dcel).half_edges();
+    ///
+    ///     if a.origin().eq(*v2) {
+    ///	        [v1, v2] = [v2, v1];
+    ///     }
+    ///
+    ///     assert!(b.target().eq(*v1));
+    ///     assert!(a.target().eq(*v2));
+    /// })
     pub fn target(self, token: &impl ReflAsRef<GhostToken<'brand>>) -> ptr!(Vertex) {
         self.twin(token).origin(token)
     }
@@ -495,11 +896,53 @@ impl<'tok, 'brand, 'arena, V> lens!(HalfEdge) {
 }
 
 entity!(loop_: Loop;
-    half_edges[half_edge: half_edge back]: HalfEdge,
+    half_edges[
+        /// Returns an iterator over the half-edges this loop is made of, starting with an arbitrary one.
+        ///
+        /// # Examples
+        ///
+        /// ```
+        /// use dcel::{Dcel, Kevvlfs};
+        ///
+        /// Dcel::new(|mut dcel| {
+        ///     let body = dcel.new_body();
+        ///     let Kevvlfs { edge, loop_, .. } = dcel.mevvlfs(*body, [4, 5]).unwrap();
+        ///     let [a, b] = edge.lens(&dcel).half_edges();
+        ///     let half_edges = loop_.iter_half_edges(&dcel);
+        ///
+        ///     assert!(half_edges.eq([a, b]) || half_edges.eq([b, a]));
+        /// })
+        half_edge: half_edge back]: HalfEdge,
+    /// Returns a back pointer to the Face this Loop belongs to.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dcel::{Dcel, Kevvlfs};
+    ///
+    /// Dcel::new(|mut dcel| {
+    ///     let body = dcel.new_body();
+    ///     let Kevvlfs { loop_, face, ..  } = dcel.mevvlfs(*body, [4, 5]).unwrap();
+    ///
+    ///     assert!(loop_.face(&dcel).eq(*face, &dcel));
+    /// })
     pub face: Face
 );
 
 impl<'brand, 'arena, V> ptr!(Loop) {
+    /// Returns true if this loop is the outer loop of its face.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dcel::Dcel;
+    ///
+    /// Dcel::new(|mut dcel| {
+    ///     let body = dcel.new_body();
+    ///     let loop_ = dcel.mevvlfs(*body, [4, 5]).unwrap().loop_;
+    ///
+    ///     assert!(loop_.is_outer(&dcel));
+    /// })
     pub fn is_outer(self, token: &impl ReflAsRef<GhostToken<'brand>>) -> bool {
         self.lens(token).is_outer()
     }
@@ -561,6 +1004,23 @@ impl<'brand, 'arena, V> own!(Edge) {
 }
 
 impl<'brand, 'arena, V> ptr!(Edge) {
+    /// Returns the two half-edges associated with this edge.
+    ///
+    /// The half edges are twins and facing in opposite directions.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dcel::Dcel;
+    ///
+    /// Dcel::new(|mut dcel| {
+    ///     let body = dcel.new_body();
+    ///     let edge = dcel.mevvlfs(*body, [4, 5]).unwrap().edge;
+    ///     let [a, b] = edge.half_edges(&dcel);
+    ///
+    ///     assert!(a.twin(&dcel).eq(b, &dcel));
+    ///     assert!(b.twin(&dcel).eq(a, &dcel));
+    /// })
     pub fn half_edges(self, token: &impl ReflAsRef<GhostToken<'brand>>) -> [ptr!(HalfEdge); 2] {
         self.borrow(token)
             .half_edges
@@ -568,18 +1028,24 @@ impl<'brand, 'arena, V> ptr!(Edge) {
             .map(|x| *x.as_deref().unwrap())
     }
 
+    /// Returns the origin vertices of the two half-edges associated with this edge.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dcel::{mklens, Dcel, Kevvlfs};
+    ///
+    /// Dcel::new(|mut dcel| {
+    ///     let body = dcel.new_body();
+    ///     let Kevvlfs { edge, vertices: [v1, v2], .. } = dcel.mevvlfs(*body, [4, 5]).unwrap();
+    ///     let verts = edge.vertices(&dcel).map(|x| x.lens(&dcel));
+    ///     mklens!(&dcel, v1, v2);
+    ///
+    ///     assert!(verts == [v1, v2] || verts == [v2, v1]);
+    /// })
     pub fn vertices(self, token: &impl ReflAsRef<GhostToken<'brand>>) -> [ptr!(Vertex); 2] {
         self.half_edges(token).map(|x| x.origin(token))
     }
-
-    /*
-    fn set_half_edges(
-        self,
-        x: [own!(HalfEdge); 2],
-        token: &mut impl ReflAsMut<GhostToken<'brand>>,
-    ) {
-        self.borrow_mut(token).half_edges = Some(x);
-    }*/
 }
 
 impl<'tok, 'brand, 'arena, V> lens!(Edge) {
@@ -600,8 +1066,48 @@ impl<'tok, 'brand, 'arena, V> lens!(Edge) {
 }
 
 entity!(face: Face;
+    /// Returns the outer (peripheral) Loop of this face.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dcel::{Dcel, Kevvlfs};
+    ///
+    /// Dcel::new(|mut dcel| {
+    ///     let body = dcel.new_body();
+    ///     let Kevvlfs { loop_, face, .. } = dcel.mevvlfs(*body, [4, 5]).unwrap();
+    ///
+    ///     assert!(face.outer_loop(&dcel).eq(*loop_, &dcel));
+    /// })
     pub outer_loop: Loop,
-    inner_loops[inner_loop: loop_ back]: Loop,
+    inner_loops[
+        /// Returns an iterator over the inner (hole) Loops of this face.
+        ///
+        /// # Examples
+        ///
+        /// ```
+        /// use dcel::Dcel;
+        ///
+        /// Dcel::new(|mut dcel| {
+        ///     let body = dcel.new_body();
+        ///     let face = dcel.mevvlfs(*body, [4, 5]).unwrap().face;
+        ///
+        ///     assert!(face.iter_inner_loops(&dcel).next().is_none());
+        /// })
+        inner_loop: loop_ back]: Loop,
+    /// Returns a back pointer to the Shell this Face belongs to.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dcel::{Dcel, Kevvlfs};
+    ///
+    /// Dcel::new(|mut dcel| {
+    ///     let body = dcel.new_body();
+    ///     let Kevvlfs { face, shell, .. } = dcel.mevvlfs(*body, [4, 5]).unwrap();
+    ///
+    ///     assert!(face.shell(&dcel).eq(*shell, &dcel));
+    /// })
     pub shell: Shell
 );
 
@@ -616,9 +1122,68 @@ impl<'brand, 'arena, V> own!(Face) {
 }
 
 entity!(shell: Shell;
-    faces[face: face back]: Face,
-    edges[edge: edge]: Edge,
-    vertices[vertex: vertex (V)]: Vertex,
+    faces[
+        /// Returns an iterator over all faces in this shell.
+        ///
+        /// # Examples
+        ///
+        /// ```
+        /// use dcel::{Dcel, Kevvlfs};
+        /// use std::iter::once;
+        ///
+        /// Dcel::new(|mut dcel| {
+        ///     let body = dcel.new_body();
+        ///     let Kevvlfs { face, shell, .. } = dcel.mevvlfs(*body, [4, 5]).unwrap();
+        ///
+        ///     assert!(shell.iter_faces(&dcel).eq(once(face.lens(&dcel))));
+        /// })
+        face: face back]: Face,
+    edges[
+        /// Returns an iterator over all faces in this shell.
+        ///
+        /// # Examples
+        ///
+        /// ```
+        /// use dcel::{Dcel, Kevvlfs};
+        /// use std::iter::once;
+        ///
+        /// Dcel::new(|mut dcel| {
+        ///     let body = dcel.new_body();
+        ///     let Kevvlfs { edge, shell, .. } = dcel.mevvlfs(*body, [4, 5]).unwrap();
+        ///
+        ///     assert!(shell.iter_edges(&dcel).eq(once(edge.lens(&dcel))));
+        /// })
+        edge: edge]: Edge,
+    vertices[
+        /// Returns an iterator over all faces in this shell.
+        ///
+        /// # Examples
+        ///
+        /// ```
+        /// use dcel::{mklens, Dcel, Kevvlfs};
+        ///
+        /// Dcel::new(|mut dcel| {
+        ///     let body = dcel.new_body();
+        ///     let Kevvlfs { vertices: [v1, v2], shell, .. } = dcel.mevvlfs(*body, [4, 5]).unwrap();
+        ///     mklens!(&dcel, v1, v2);
+        ///     let verts = shell.iter_vertices(&dcel);
+        ///
+        ///     assert!(verts.eq([v1, v2]) || verts.eq([v2, v1]));
+        /// })
+        vertex: vertex (V)]: Vertex,
+    /// Returns a back pointer to the Body this Shell belongs to.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dcel::Dcel;
+    ///
+    /// Dcel::new(|mut dcel| {
+    ///     let body = dcel.new_body();
+    ///     let shell = dcel.mevvlfs(*body, [4, 5]).unwrap().shell;
+    ///
+    ///     assert!(shell.body(&dcel).eq(*body, &dcel));
+    /// })
     pub body: Body
 );
 
@@ -638,7 +1203,22 @@ impl<'brand, 'arena, V> own!(Shell) {
 }
 
 entity!(body: Body;
-    shells[shell: shell back]: Shell
+    shells[
+        /// Returns an iterator over all shells in this body.
+        ///
+        /// # Examples
+        ///
+        /// ```
+        /// use dcel::Dcel;
+        /// use std::iter::once;
+        ///
+        /// Dcel::new(|mut dcel| {
+        ///     let body = dcel.new_body();
+        ///     let shell = dcel.mevvlfs(*body, [4, 5]).unwrap().shell;
+        ///
+        ///     assert!(body.iter_shells(&dcel).eq(once(shell.lens(&dcel))));
+        /// })
+        shell: shell back]: Shell
 );
 
 impl<'brand, 'arena, V> own!(Body) {
@@ -646,14 +1226,14 @@ impl<'brand, 'arena, V> own!(Body) {
         self.iter_mut_shells(dcel, |x, dcel| {
             Own::unsafe_make_owned(x).destroy(dcel);
         });
-        dcel.delete_body(self);
+        dcel.delete_body(self).unwrap();
     }
 }
 
 struct Allocator<'brand, 'arena, T: Entity<'brand, 'arena>> {
     next_id: usize,
     arena: &'arena Arena<T>,
-    freelist: Vec<own_t!(T)>,
+    freelist: Vec<&'arena GhostCell<'brand, T>>,
 }
 
 impl<'brand, 'arena, T: Entity<'brand, 'arena>> Allocator<'brand, 'arena, T> {
@@ -672,18 +1252,21 @@ impl<'brand, 'arena, T: Entity<'brand, 'arena>> Allocator<'brand, 'arena, T> {
     }
 
     fn alloc(&mut self, x: T, token: &mut impl ReflAsMut<GhostToken<'brand>>) -> own_t!(T) {
-        if let Some(ptr) = self.freelist.pop() {
-            *ptr.borrow_mut(token) = x;
-            ptr
-        } else {
-            Own::unsafe_make_owned(Ptr(GhostCell::from_mut(self.arena.alloc(x))))
-        }
+        Own::unsafe_make_owned(Ptr::new(
+            if let Some(cell) = self.freelist.pop() {
+                *cell.borrow_mut(token.as_mut()) = x;
+                cell
+            } else {
+                GhostCell::from_mut(self.arena.alloc(x))
+            },
+            token,
+        ))
     }
 
     fn free(&mut self, token: &mut impl ReflAsMut<GhostToken<'brand>>, ptr: own_t!(T)) {
-        debug_assert!(ptr.alive(token), "double free");
+        let _ = ptr.id(token); // to prevent double free
         ptr.clear(token);
-        self.freelist.push(ptr);
+        self.freelist.push(ptr.cell);
     }
 }
 
@@ -710,19 +1293,44 @@ impl<T, E: Display> Display for OperatorErr<T, E> {
     }
 }
 
+/// A trait for Euler-Operators with preconditions and inverse operations.
 pub trait Operator<'brand, 'arena, V>: Sized {
+    /// The inverse of the operation, created by applying it.
+    /// Applying the inverse should revert the operation.
+    /// This may not work if other operators have been used to modify the DCEL in the meantime.
     type Inverse: Operator<'brand, 'arena, V>;
+
+    /// Error returned on precondition failure.
     type Error: std::error::Error;
+
+    /// Info returned by precondition success.
     type Check;
 
+    /// Check if preconditions are met without making any modifications to the DCEL.
+    ///
+    /// On precondition failure, an error indicating the reason for the failure is returned.
+    ///
+    /// On precondition success, this method may return additional info computed during
+    /// precondition checking and used by the [`Operator::apply`] method.
+    ///
+    /// [`Operator::apply`] calls this method to check for preconditions.
     fn check(&self, dcel: &Dcel<'brand, 'arena, V>) -> Result<Self::Check, Self::Error>;
 
+    /// Check for preconditions and run the operation, taking ownership of it.
+    ///
+    /// On precondition failure, an [`OperatorErr`] is returned, which contains both an error
+    /// as well as the original operation passed in, for recovery purposes.
+    ///
+    /// On precondition success, the DCEL is modified and the inverse operation is returned.
     fn apply(
         self,
         dcel: &mut Dcel<'brand, 'arena, V>,
     ) -> Result<Self::Inverse, OperatorErr<Self, Self::Error>>;
 }
 
+/// A struct containing typed arena allocators for entities used by [`Dcel`].
+///
+/// Use [`Default::default()`] to construct this, or create [`Arena`] structs individually.
 pub struct DcelArena<'brand, 'arena, V> {
     pub vertex: Arena<Vertex<'brand, 'arena, V>>,
     pub half_edge: Arena<HalfEdge<'brand, 'arena, V>>,
@@ -747,6 +1355,9 @@ impl<'brand, 'arena, V> Default for DcelArena<'brand, 'arena, V> {
     }
 }
 
+/// A doubly-connected edge-list.
+///
+/// Use [`Dcel::new`] to create a DCEL with a new [`GhostToken`] or [`Dcel::from_token`] to create one for an existing [`GhostToken`].
 pub struct Dcel<'brand, 'arena, V> {
     pub token: GhostToken<'brand>,
     vertex: Allocator<'brand, 'arena, Vertex<'brand, 'arena, V>>,
@@ -772,6 +1383,21 @@ impl<'brand, 'arena, V> ReflAsMut<GhostToken<'brand>> for Dcel<'brand, 'arena, V
 }
 
 impl<'brand, 'arena, V> Dcel<'brand, 'arena, V> {
+    /// Creates a new DCEL with a new [`GhostToken`] and default arena allocators.
+    #[allow(clippy::new_ret_no_self)]
+    pub fn new<R, F>(fun: F) -> R
+    where
+        for<'new_brand, 'new_arena> F: FnOnce(Dcel<'new_brand, 'new_arena, V>) -> R,
+    {
+        GhostToken::new(|token| {
+            let arena = DcelArena::default();
+            let dcel = Dcel::from_token(token, &arena);
+
+            fun(dcel)
+        })
+    }
+
+    /// Creates a DCEL associated with the given [`GhostToken`] and using the arena allocators passed in.
     pub fn from_token(token: GhostToken<'brand>, ar: &'arena DcelArena<'brand, 'arena, V>) -> Self {
         Self {
             token,
@@ -786,43 +1412,75 @@ impl<'brand, 'arena, V> Dcel<'brand, 'arena, V> {
         }
     }
 
-    #[allow(clippy::new_ret_no_self)]
-    pub fn new<R, F>(fun: F) -> R
-    where
-        for<'new_brand, 'new_arena> F: FnOnce(Dcel<'new_brand, 'new_arena, V>) -> R,
-    {
-        GhostToken::new(|token| {
-            let arena = DcelArena::default();
-            let dcel = Dcel::from_token(token, &arena);
-
-            fun(dcel)
-        })
-    }
-
+    /// Adds a new, empty body to the DCEL.
+    ///
+    /// # Examples
+    /// ```
+    /// use dcel::Dcel;
+    ///
+    /// Dcel::<()>::new(|mut dcel| {
+    ///     let body = dcel.new_body();
+    ///     /* ... */
+    /// })
+    /// ```
     pub fn new_body(&mut self) -> own!(Body) {
         let body = Body::new(self);
         self.bodies = Some(Entity::list_add(*body, self.bodies, self));
         body
     }
 
-    pub fn delete_body(&mut self, body: own!(Body)) {
+    /// Removes a body from the DCEL.
+    ///
+    /// Requires the body to be empty. Ok is returned on success, if the body is non-empty (has shells), Err is returned
+    ///
+    /// # Examples
+    /// ```
+    /// use dcel::Dcel;
+    ///
+    /// Dcel::<()>::new(|mut dcel| {
+    ///     let body = dcel.new_body();
+    ///     dcel.delete_body(body).unwrap();
+    /// })
+    /// ```
+    pub fn delete_body(&mut self, body: own!(Body)) -> Result<(), ()> {
+        if body.maybe_shells(self).is_some() {
+            return Err(());
+        }
         self.bodies = Entity::list_remove(*body, self);
         body.free(self);
+        Ok(())
     }
 
+    /// Returns an iterator over all bodies in the DCEL.
+    ///
+    /// # Examples
+    /// ```
+    /// use dcel::Dcel;
+    /// use std::iter::once;
+    ///
+    /// Dcel::<()>::new(|mut dcel| {
+    ///     let body = dcel.new_body();
+    ///     assert!(dcel.iter_bodies().eq(once(body.lens(&dcel))));
+    /// })
+    /// ```
     pub fn iter_bodies<'tok>(
         &'tok self,
     ) -> EntityIterator<'tok, 'brand, 'arena, Body<'brand, 'arena, V>> {
         EntityIterator::new(self.bodies, self)
     }
 
-    // fn new_edge(&mut self, shell: ptr!(Shell)) -> (own!(Edge), [ptr!(HalfEdge); 2]) {}
-
     fn follow(&mut self, prev: ptr!(HalfEdge), next: ptr!(HalfEdge)) {
         next.set_prev(prev, self);
         prev.set_next(next, self);
     }
 
+    /// Make-Edge-Vertex-Vertex-Loop-Face-Shell
+    ///
+    /// This corresponds to MEVVLS in SNUMOD and is the inverse of kevvlfs. Adds a new shell with two vertices connected by an
+    /// edge. Both half edges in the edge form a loop that is the outer loop of a new face.
+    /// No preconditions.
+    ///
+    /// For examples, see `src/tests.rs`
     pub fn mevvlfs(
         &mut self,
         body: ptr!(Body),
@@ -832,6 +1490,14 @@ impl<'brand, 'arena, V> Dcel<'brand, 'arena, V> {
         Mevvlfs::new(body, data).apply(self)
     }
 
+    /// Kill-Edge-Vertex-Vertex-Loop-Face-Shell
+    ///
+    /// This corresponds to KEVVLS in SNUMOD and is the inverse of mevvlfs. Removes a shell and two vertices connected by an
+    /// edge, as well as a face and it's outer loop. The relationships between the entities
+    /// must be as described in [`Dcel::mevvlfs`], and the vertices, edge, and face must be
+    /// the only ones in the shell.
+    ///
+    /// For examples, see `src/tests.rs`
     pub fn kevvlfs(
         &mut self,
         edge: own!(Edge),
@@ -844,6 +1510,13 @@ impl<'brand, 'arena, V> Dcel<'brand, 'arena, V> {
         Kevvlfs::new(edge, vertices, loop_, face, shell).apply(self)
     }
 
+    /// Make-Edge-Vertex
+    ///
+    /// This corresponds to MEV in SNUMOD and is the inverse of kev. Adds a vertex connected to an existing vertex via an
+    /// edge going back and forth. Both half-edges of the new edge will be added to the given loop.
+    /// The given vertex must be part of the given loop.
+    ///
+    /// For examples, see `src/tests.rs`
     pub fn mev(
         &mut self,
         loop_: ptr!(Loop),
@@ -853,6 +1526,12 @@ impl<'brand, 'arena, V> Dcel<'brand, 'arena, V> {
         Mev::new(loop_, vertex, data).apply(self)
     }
 
+    /// Kill-Edge-Vertex
+    ///
+    /// This corresponds to KEV in SNUMOD and is the inverse of mev. Removes a vertex connected to an existing vertex via an
+    /// edge going back and forth. The vertex to be removed must only be connected to one other vertex, using the given edge only.
+    ///
+    /// For examples, see `src/tests.rs`
     pub fn kev(
         &mut self,
         edge: own!(Edge),
@@ -861,6 +1540,12 @@ impl<'brand, 'arena, V> Dcel<'brand, 'arena, V> {
         Kev::new(edge, vertex).apply(self)
     }
 
+    /// Make-Edge-Loop-Face
+    ///
+    /// This corresponds to MEL in SNUMOD and is the inverse of kelf. Connects two existing vertices both part of the same
+    /// loop, creating a new face (and outer loop)
+    ///
+    /// For examples, see `src/tests.rs`
     pub fn melf(
         &mut self,
         vertices: [ptr!(Vertex); 2],
@@ -869,6 +1554,14 @@ impl<'brand, 'arena, V> Dcel<'brand, 'arena, V> {
         Melf::new(vertices, loop_).apply(self)
     }
 
+    /// Make-Edge-Loop-Face
+    ///
+    /// This corresponds to KEL in SNUMOD and is the inverse of melf. Removes an existing edge
+    /// between two vertices, joining two loops in the process, removing one of them (must be
+    /// passed in as an owned pointer). The given loop must be the outer loop of the given face,
+    /// which must not have inner loops.
+    ///
+    /// For examples, see `src/tests.rs`
     pub fn kelf(
         &mut self,
         edge: own!(Edge),
@@ -878,6 +1571,12 @@ impl<'brand, 'arena, V> Dcel<'brand, 'arena, V> {
         Kelf::new(edge, loop_, face).apply(self)
     }
 
+    /// Make-Vertex-Edge
+    ///
+    /// This corresponds to MVE in SNUMOD and is the inverse of kve. Adds a new vertex in the
+    /// middle of an existing edge, splitting the edge in two. No preconditions.
+    ///
+    /// For examples, see `src/tests.rs`
     pub fn mve(
         &mut self,
         edge: ptr!(Edge),
@@ -886,6 +1585,14 @@ impl<'brand, 'arena, V> Dcel<'brand, 'arena, V> {
         Mve::new(edge, data).apply(self)
     }
 
+    /// Kill-Vertex-Edge
+    ///
+    /// This corresponds to KVE in SNUMOD and is the inverse of mve. Removes a vertex
+    /// that exists between two other vertices using two edges, connected to one of the by the given edge, which
+    /// is removed (joined with the other edge). The vertex must not be connected to any
+    /// other edges.
+    ///
+    /// For examples, see `src/tests.rs`
     pub fn kve(
         &mut self,
         edge: own!(Edge),
@@ -894,6 +1601,13 @@ impl<'brand, 'arena, V> Dcel<'brand, 'arena, V> {
         Kve::new(edge, vertex).apply(self)
     }
 
+    /// Make-Edge-Kill-Hole
+    ///
+    /// This corresponds to MEKH in SNUMOD and is the inverse of kemh. Two loops that are part of
+    /// the same face are joined by making an edge between two given vertices part of each loop respectively.
+    /// The loop being removed must now be an outer loop, and a loop cannot be joined with itself.
+    ///
+    /// For examples, see `src/tests.rs`
     pub fn mekh(
         &mut self,
         shell: ptr!(Shell),
@@ -905,6 +1619,12 @@ impl<'brand, 'arena, V> Dcel<'brand, 'arena, V> {
         Mekh::new(shell, into_loop, into_vertex, hole_loop, hole_vertex).apply(self)
     }
 
+    /// Make-Edge-Kill-Hole
+    ///
+    /// This corresponds to KEMH in SNUMOD and is the inverse of mekh. An edge going back and forth
+    /// between two vertices is removed, splitting a loop into two loops, adding a new hole loop.
+    ///
+    /// For examples, see `src/tests.rs`
     pub fn kemh(
         &mut self,
         shell: ptr!(Shell),
@@ -915,6 +1635,12 @@ impl<'brand, 'arena, V> Dcel<'brand, 'arena, V> {
         Kemh::new(shell, edge, loop_, hole_vertex).apply(self)
     }
 
+    /// Make-Split-Edge-Vertex
+    ///
+    /// This corresponds to MZEV in SNUMOD with the exception of not (necessarily) creating a zero-length edge and is the inverse of ksev. It is similar to MVE, except the involved vertices can be
+    /// part of more than one loop.
+    ///
+    /// For examples, see `src/tests.rs`
     pub fn msev(
         &mut self,
         shell: ptr!(Shell),
@@ -925,6 +1651,12 @@ impl<'brand, 'arena, V> Dcel<'brand, 'arena, V> {
         Msev::new(shell, vertex, loops, data).apply(self)
     }
 
+    /// Kill-Split-Edge-Vertex
+    ///
+    /// This corresponds to KZEV in SNUMOD with the exception of not (necessarily) killing a zero-length edge and is the inverse of msev. It is similar to KVE, except the involved vertices can be
+    /// part of more than one loop.
+    ///
+    /// For examples, see `src/tests.rs`
     pub fn ksev(
         &mut self,
         shell: ptr!(Shell),
@@ -936,6 +1668,13 @@ impl<'brand, 'arena, V> Dcel<'brand, 'arena, V> {
         Ksev::new(shell, loops, old_vertex, new_vertex, edge).apply(self)
     }
 
+    /// Make-Peripheral-Kill-Hole
+    ///
+    /// This corresponds to MPKH in SNUMOD and is the inverse of kpmh. An inner (hole) loop is
+    /// converted to the outer loop of a new face. This may potentially result in two disconnected
+    /// manifolds, in which case the shells are split and the newly created shell is returned.
+    ///
+    /// For examples, see `src/tests.rs`
     pub fn mpkh(
         &mut self,
         loop_: ptr!(Loop),
@@ -943,6 +1682,17 @@ impl<'brand, 'arena, V> Dcel<'brand, 'arena, V> {
         Mpkh::new(loop_).apply(self)
     }
 
+    /// Kill-Peripheral-Make-Hole
+    ///
+    /// This corresponds to KPMH in SNUMOD and is the inverse of kpmh. An outer (peripheral) loop is
+    /// converted to the inner loop of an existing face, removing its original face.
+    /// This may cause two previously disconnected shells to now be connected, in which case
+    /// they will be merged into one. The shell
+    /// to be removed (which, if applicable, is the shell of the removed face) must be passed
+    /// in if and only if a merge needs to happen. The removed face must not have any inner loops
+    /// and it is not possible to merge shells belonging to different bodies.
+    ///
+    /// For examples, see `src/tests.rs`
     pub fn kpmh(
         &mut self,
         new_shell: Option<own!(Shell)>,

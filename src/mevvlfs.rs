@@ -2,6 +2,9 @@ use crate::*;
 
 // Make Edge-Vertex-Vertex-Loop-Face-Shell
 
+/// Operator corresponding to MEVVLS in SNUMOD.
+///
+/// See [`Dcel::mevvlfs`] for details.
 pub struct Mevvlfs<'brand, 'arena, V> {
     pub body: ptr!(Body),
     pub data: [V; 2],
@@ -59,6 +62,9 @@ impl<'brand, 'arena, V> Operator<'brand, 'arena, V> for Mevvlfs<'brand, 'arena, 
     }
 }
 
+/// Operator corresponding to KEVVLS in SNUMOD.
+///
+/// See [`Dcel::kevvlfs`] for details.
 pub struct Kevvlfs<'brand, 'arena, V> {
     pub edge: own!(Edge),
     pub vertices: [own!(Vertex); 2],
@@ -67,6 +73,7 @@ pub struct Kevvlfs<'brand, 'arena, V> {
     pub shell: own!(Shell),
 }
 
+/// Precondition Error for [`Kevvlfs`].
 #[derive(Debug, Error)]
 pub enum KevvlfsError {
     #[error("edge vertices do not equal vertices")]

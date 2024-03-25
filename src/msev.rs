@@ -2,6 +2,9 @@
 
 use crate::*;
 
+/// Operator corresponding to MZEV in SNUMOD.
+///
+/// See [`Dcel::msev`] for details.
 pub struct Msev<'brand, 'arena, V> {
     pub shell: ptr!(Shell),
     pub vertex: ptr!(Vertex),
@@ -20,6 +23,7 @@ impl<'brand, 'arena, V> Msev<'brand, 'arena, V> {
     }
 }
 
+/// Precondition Error for [`Msev`].
 #[derive(Debug, Error)]
 pub enum MsevError {
     #[error("vertex is not part of loop")]
@@ -81,6 +85,9 @@ impl<'brand, 'arena, V> Operator<'brand, 'arena, V> for Msev<'brand, 'arena, V> 
     }
 }
 
+/// Operator corresponding to KZEV in SNUMOD.
+///
+/// See [`Dcel::ksev`] for details.
 pub struct Ksev<'brand, 'arena, V> {
     pub shell: ptr!(Shell),
     pub loops: [ptr!(Loop); 2],
@@ -107,6 +114,7 @@ impl<'brand, 'arena, V> Ksev<'brand, 'arena, V> {
     }
 }
 
+/// Precondition Error for [`Ksev`].
 #[derive(Debug, Error)]
 pub enum KsevError {
     #[error("edge does not match vertices")]
